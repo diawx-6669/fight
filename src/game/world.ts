@@ -65,6 +65,17 @@ export interface WorldOptions {
    * needs so an exchange is not counted twice.
    */
   hitAuthority?: 'shared' | 'local';
+  /** Multiplies every camera shake. `0` disables it, for players who need that. */
+  shakeScale?: number;
+  /** Whether dramatic slow motion is allowed at all. */
+  slowMotion?: boolean;
+  /**
+   * Makes the AI opponent defend but never attack — the training-room dummy.
+   * Implemented by zeroing the difficulty's offensive terms rather than by a
+   * separate code path, so a passive opponent still blocks, steps and reacts
+   * exactly like a real one.
+   */
+  opponentPassive?: boolean;
 }
 
 export class World {
@@ -105,9 +116,17 @@ export class World {
   /** Who decides whether a hit landed. See `WorldOptions.hitAuthority`. */
   readonly hitAuthority: 'shared' | 'local';
 
+  /** Presentation preferences the simulation has to honour. */
+  readonly shakeScale: number;
+  readonly slowMotionEnabled: boolean;
+  private readonly opponentPassive: boolean;
+
   constructor(options: WorldOptions) {
     this.mode = options.mode;
     this.hitAuthority = options.hitAuthority ?? 'shared';
+    this.shakeScale = Math.max(0, options.shakeScale ?? 1);
+    this.slowMotionEnabled = options.slowMotion ?? true;
+    this.opponentPassive = options.opponentPassive ?? false;
     this.arena = getArena(options.arenaId);
     this.rng = new Rng(hashSeed(options.seed ?? `${Date.now()}`));
 
@@ -163,6 +182,7 @@ export class World {
     ];
 
     this.wireEvents();
+    this.applyDifficulty();
   }
 
   get p1(): Fighter {
@@ -236,7 +256,19 @@ export class World {
 
   private applyDifficulty(): void {
     const base = getDifficulty(this.difficultyId);
-    const adjusted = this.dynamicDifficulty.apply(base);
+    let adjusted = this.dynamicDifficulty.apply(base);
+
+    if (this.opponentPassive) {
+      adjusted = {
+        ...adjusted,
+        aggression: 0,
+        punishRate: 0,
+        comboRate: 0,
+        // It still guards, so the player can practise against a real block.
+        blockChance: Math.max(adjusted.blockChance, 0.6),
+      };
+    }
+
     for (const brain of this.brains) brain?.setDifficulty(adjusted);
   }
 
@@ -386,14 +418,17 @@ export class World {
   }
 
   addShake(magnitude: number, frames: number): void {
+    const scaled = magnitude * this.shakeScale;
+    if (scaled <= 0) return;
     // Take the stronger of the two rather than summing, so a flurry of small
     // hits cannot shake the camera into unreadability.
-    this.shake.magnitude = Math.max(this.shake.magnitude, magnitude);
+    this.shake.magnitude = Math.max(this.shake.magnitude, scaled);
     this.shakeFrames = Math.max(this.shakeFrames, Math.round(frames));
-    this.events.emit('shake', { magnitude, duration: frames });
+    this.events.emit('shake', { magnitude: scaled, duration: frames });
   }
 
   requestSlowMotion(scale: number, frames: number): void {
+    if (!this.slowMotionEnabled) return;
     this.slowMotionScale = Math.min(this.slowMotionScale, scale);
     this.slowMotionFrames = Math.max(this.slowMotionFrames, frames);
     this.events.emit('slowMotion', { scale, duration: frames });

@@ -1,5 +1,7 @@
 import { clamp } from '@/core/math';
 import { QUALITY_PRESETS } from '@/core/device';
+import { ARENAS } from '@/game/arenas';
+import { CHARACTERS } from '@/game/characters';
 import { MOVES } from '@/game/moves';
 import { World, type GameMode } from '@/game/world';
 import type { NetClient } from '@/net/client';
@@ -49,6 +51,9 @@ export class FightScreen extends Screen {
   private stage = 0;
   private finished = false;
 
+  /** Survival only: how many opponents have already been beaten. */
+  private streak = 0;
+
   /** Online only. `null` for every local mode. */
   private net: NetClient | null = null;
   private readonly remoteSync = new RemoteFighterSync();
@@ -79,6 +84,7 @@ export class FightScreen extends Screen {
     const { context } = this;
     this.mode = (params?.mode as GameMode) ?? 'versus';
     this.stage = (params?.stage as number) ?? 0;
+    this.streak = (params?.streak as number) ?? 0;
 
     const settings = context.settings;
 
@@ -102,6 +108,10 @@ export class FightScreen extends Screen {
       p1Controller: this.localSlot === 0 ? 'local' : remoteController,
       p2Controller: this.localSlot === 0 ? remoteController : 'local',
       hitAuthority: this.net ? 'local' : 'shared',
+      shakeScale: settings.screenShake,
+      slowMotion: settings.slowMotion,
+      // The training dummy defends but never throws anything back.
+      opponentPassive: this.mode === 'training',
       difficulty: settings.difficulty,
       // Training has no clock and no rounds to lose.
       roundsToWin: this.mode === 'training' ? 99 : settings.roundsToWin,
@@ -113,6 +123,8 @@ export class FightScreen extends Screen {
       renderer: context.renderer,
       quality: QUALITY_PRESETS[settings.quality],
     });
+    this.scene.allowFlashes = settings.flashes;
+    this.scene.allowDamageNumbers = settings.damageNumbers;
     this.scene.attach(this.world);
 
     this.wireWorldEvents();
@@ -130,6 +142,15 @@ export class FightScreen extends Screen {
     const arena = this.world.arena;
     context.audio.startMusic(arena.musicalRoot, arena.musicalMode);
     this.world.start();
+
+    // Survival carries damage between fights — that is the whole mode. Health
+    // is restored partially rather than fully, so a long streak gets genuinely
+    // dangerous instead of just long.
+    const carried = params?.carryHealth as number | undefined;
+    if (this.mode === 'survival' && typeof carried === 'number') {
+      const local = this.world.fighters[this.localSlot];
+      local.health = Math.round(local.maxHealth * clamp(carried + 0.3, 0.2, 1));
+    }
   }
 
   private wireWorldEvents(): void {
@@ -441,6 +462,9 @@ export class FightScreen extends Screen {
       if (playerWon) {
         next.wins = progress.wins + 1;
         if (this.mode === 'arcade') next.arcadeStage = Math.max(progress.arcadeStage, this.stage + 1);
+        if (this.mode === 'survival') {
+          next.survivalBest = Math.max(progress.survivalBest, this.streak + 1);
+        }
       } else {
         next.losses = progress.losses + 1;
       }
@@ -449,12 +473,35 @@ export class FightScreen extends Screen {
       this.context.saveProgress(next);
     }
 
+    // Survival does not stop for a results screen between opponents: winning
+    // simply brings the next one out, with whatever health is left.
+    if (this.mode === 'survival' && playerWon && this.world) {
+      const local = this.world.fighters[this.localSlot];
+      const carryHealth = local.healthRatio;
+      const playerCharacter = local.character.id;
+      const beaten = this.world.fighters[this.remoteSlot].character.id;
+      const nextOpponentId = pickSurvivalOpponent(playerCharacter, beaten);
+      const arenaId = pickSurvivalArena(this.streak + 1);
+
+      window.setTimeout(() => {
+        this.context.replace('fight', {
+          mode: 'survival',
+          playerCharacter,
+          opponentCharacter: nextOpponentId,
+          arenaId,
+          streak: this.streak + 1,
+          carryHealth,
+        });
+      }, 2200);
+      return;
+    }
+
     // Let the knockout play out before cutting to the results.
     window.setTimeout(() => {
       this.context.replace('results', {
         mode: this.mode,
         winner,
-        stage: this.stage,
+        stage: this.mode === 'survival' ? this.streak : this.stage,
         playerCharacter: this.world?.fighters[this.localSlot].character.id,
         opponentCharacter: this.world?.fighters[this.remoteSlot].character.id,
         rounds: this.world?.match.results ?? [],
@@ -473,6 +520,7 @@ export class FightScreen extends Screen {
     scene.drawPost();
     scene.drawHud(this.mode !== 'training');
 
+    if (this.mode === 'survival') this.drawSurvivalStreak(ctx);
     if (!this.context.vision.status.present) this.drawTrackingWarning(ctx);
     if (this.mode === 'training') this.drawTrainingOverlay(ctx);
     if (this.context.settings.debugOverlay) this.drawDebug(ctx);
@@ -513,6 +561,33 @@ export class FightScreen extends Screen {
     ctx.fillStyle = Palette.ash300;
     ctx.fillText('Камера тебя не видит — отойди на пару шагов назад', DESIGN_WIDTH / 2, y + 68);
 
+    ctx.restore();
+  }
+
+  /**
+   * Survival streak.
+   *
+   * The only number that matters in this mode, so it gets its own place on
+   * screen rather than being buried in a results screen the player never
+   * reaches while they are still winning.
+   */
+  private drawSurvivalStreak(ctx: CanvasRenderingContext2D): void {
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    const y = 172;
+    font(ctx, TypeScale.micro, 'ui', 700);
+    ctx.letterSpacing = '0.26em';
+    ctx.fillStyle = Palette.ash400;
+    ctx.fillText('ПОБЕД ПОДРЯД', DESIGN_WIDTH / 2, y);
+    ctx.letterSpacing = '0px';
+
+    font(ctx, 58, 'display');
+    ctx.fillStyle = Palette.venom;
+    ctx.shadowColor = Palette.venom;
+    ctx.shadowBlur = 18;
+    ctx.fillText(String(this.streak), DESIGN_WIDTH / 2, y + 42);
     ctx.restore();
   }
 
@@ -626,6 +701,20 @@ export class FightScreen extends Screen {
     }
     ctx.restore();
   }
+}
+
+/** Picks the next survival opponent, avoiding the one just beaten. */
+function pickSurvivalOpponent(playerId: string, justBeaten: string): string {
+  const pool = CHARACTERS.filter(
+    (character) => character.id !== playerId && character.id !== justBeaten,
+  );
+  if (pool.length === 0) return justBeaten;
+  return pool[Math.floor(Math.random() * pool.length)].id;
+}
+
+/** Rotates arenas so a long streak does not happen entirely in one place. */
+function pickSurvivalArena(streak: number): string {
+  return ARENAS[streak % ARENAS.length].id;
 }
 
 /** Keyboard fallback bindings. */

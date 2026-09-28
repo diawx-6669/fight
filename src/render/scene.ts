@@ -73,6 +73,18 @@ export class FightScene {
   /** Tracks the previous frame's foot heights, to place landing dust. */
   private readonly wasAirborne: [boolean, boolean] = [false, false];
 
+  /**
+   * Whether full-screen flashes are allowed.
+   *
+   * Off is a genuine accessibility need, not a taste setting, so it is honoured
+   * at the single point where every flash is issued rather than at each call
+   * site — one place to be wrong instead of a dozen.
+   */
+  allowFlashes = true;
+
+  /** Whether floating damage numbers are drawn. */
+  allowDamageNumbers = true;
+
   constructor(options: SceneOptions) {
     this.renderer = options.renderer;
     this.quality = options.quality;
@@ -132,12 +144,12 @@ export class FightScene {
       world.events.on('fightStart', () => {
         this.hud.announce('БЕЙ!', Palette.ember, 1.1);
         this.letterboxTarget = 0;
-        this.effects.flash(0.3, Palette.ember);
+        this.flash(0.3, Palette.ember);
       }),
       world.events.on('knockout', ({ winner, perfect }) => {
         this.hud.announce(perfect ? 'ИДЕАЛЬНО' : 'НОКАУТ', Palette.blood, 2.2);
         this.letterboxTarget = 1;
-        this.effects.flash(0.85, Palette.white);
+        this.flash(0.85, Palette.white);
         this.bloomBoost = 1;
         this.aberrationBoost = 7;
         void winner;
@@ -159,6 +171,12 @@ export class FightScene {
 
   // --- event handlers -------------------------------------------------------
 
+  /** Single gate for every full-screen flash in the game. */
+  private flash(strength: number, color: string): void {
+    if (!this.allowFlashes) return;
+    this.effects.flash(strength, color);
+  }
+
   private onHit(event: HitEvent): void {
     const { attacker, defender, severity, x, y } = event;
     const color = attacker.character.visuals.spark;
@@ -172,11 +190,19 @@ export class FightScene {
     }
     if (severity > 0.75) {
       this.effects.burst(x, y, severity, Palette.white);
-      this.effects.flash(severity * 0.25, color);
+      this.flash(severity * 0.25, color);
       this.aberrationBoost = Math.max(this.aberrationBoost, severity * 4);
     }
 
-    this.effects.damage(x, y + 0.2, event.damage, event.zone === 'head' ? Palette.gold : Palette.paper, event.result === 'counter');
+    if (this.allowDamageNumbers) {
+      this.effects.damage(
+        x,
+        y + 0.2,
+        event.damage,
+        event.zone === 'head' ? Palette.gold : Palette.paper,
+        event.result === 'counter',
+      );
+    }
 
     if (event.result === 'counter') {
       this.effects.banner(x, y + 0.7, 'КОНТРА', Palette.gold);
@@ -197,7 +223,7 @@ export class FightScene {
     this.effects.ring(event.x, event.y, 1, Palette.gold);
     this.effects.burst(event.x, event.y, 1, Palette.gold);
     this.effects.banner(event.x, event.y + 0.6, 'ПАРИРОВАНИЕ', Palette.gold);
-    this.effects.flash(0.4, Palette.gold);
+    this.flash(0.4, Palette.gold);
     this.particles.emit({
       x: event.x,
       y: event.y,
