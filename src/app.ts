@@ -290,6 +290,9 @@ export class App {
     this.renderer.end();
 
     // 6. The camera preview lives on its own canvas outside the design space.
+    //    An empty black rectangle where a camera feed should be looks like a
+    //    bug, so it hides itself whenever there is nothing to show.
+    this.mirror.visible = this.settings.showCamera && this.vision.status.cameraActive;
     this.mirror.draw(
       this.vision.skeleton,
       this.settings.showSkeleton ? this.vision.hands.hands : null,

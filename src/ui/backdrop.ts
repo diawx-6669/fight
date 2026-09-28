@@ -79,59 +79,105 @@ export class MenuBackdrop {
   }
 
   /**
-   * A vast, soft silhouette behind everything. Drawn with very low contrast so
-   * the eye registers "there is something there" and then moves on.
+   * A vast, soft silhouette behind everything.
+   *
+   * Drawn from an actual fighting stance rather than from abstract shapes: a
+   * head, a tapered torso, two arms held in a guard and a bladed leg stance.
+   * An earlier version used a rounded trapezoid for the body and, at this
+   * scale and contrast, read unmistakably as a drinking cup — the lesson being
+   * that a silhouette has to be built from a pose, not from geometry that
+   * happens to be person-shaped in the abstract.
    */
   private drawFigure(ctx: CanvasRenderingContext2D): void {
-    const breathe = Math.sin(this.time * 0.5) * 8;
-    const cx = DESIGN_WIDTH * 0.74;
-    const cy = DESIGN_HEIGHT * 0.62 + breathe;
-    const scale = 520;
+    const breathe = Math.sin(this.time * 0.5) * 7;
+    // The hip, which everything else is measured from.
+    const hx = DESIGN_WIDTH * 0.76;
+    const hy = DESIGN_HEIGHT * 0.72 + breathe;
+    const s = 430;
+
+    // Pose, in hip-relative units. Negative y is up.
+    const chest: [number, number] = [hx + s * 0.02, hy - s * 0.5];
+    const neck: [number, number] = [hx + s * 0.03, hy - s * 0.63];
+    const head: [number, number] = [hx + s * 0.04, hy - s * 0.79];
+    const headR = s * 0.125;
+
+    const shoulderL: [number, number] = [hx - s * 0.15, hy - s * 0.49];
+    const shoulderR: [number, number] = [hx + s * 0.18, hy - s * 0.5];
+    const elbowL: [number, number] = [hx - s * 0.27, hy - s * 0.3];
+    const elbowR: [number, number] = [hx + s * 0.3, hy - s * 0.31];
+    // Fists up by the jaw: the read that says "fighter" rather than "statue".
+    const handL: [number, number] = [hx - s * 0.1, hy - s * 0.64];
+    const handR: [number, number] = [hx + s * 0.16, hy - s * 0.69];
+
+    const hipL: [number, number] = [hx - s * 0.1, hy];
+    const hipR: [number, number] = [hx + s * 0.1, hy];
+    const kneeL: [number, number] = [hx - s * 0.2, hy + s * 0.27];
+    const kneeR: [number, number] = [hx + s * 0.16, hy + s * 0.28];
+    const footL: [number, number] = [hx - s * 0.3, hy + s * 0.54];
+    const footR: [number, number] = [hx + s * 0.24, hy + s * 0.55];
 
     ctx.save();
     ctx.globalAlpha = 0.5;
-    ctx.fillStyle = alpha(Palette.ink900, 0.9);
-    ctx.shadowColor = alpha(this.accent, 0.3);
-    ctx.shadowBlur = 90;
+    ctx.fillStyle = alpha(Palette.ink900, 0.94);
+    ctx.strokeStyle = alpha(Palette.ink900, 0.94);
+    ctx.shadowColor = alpha(this.accent, 0.26);
+    ctx.shadowBlur = 80;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
 
-    ctx.beginPath();
-    // Head.
-    ctx.arc(cx, cy - scale * 0.78, scale * 0.15, 0, TAU);
-    ctx.fill();
+    // Legs first, so the torso overlaps them at the hip.
+    ctx.lineWidth = s * 0.115;
+    strokeChain(ctx, [hipL, kneeL, footL]);
+    strokeChain(ctx, [hipR, kneeR, footR]);
 
-    // Torso, tapering to the hips.
+    // Torso: wide at the shoulders, drawn in at the waist.
     ctx.beginPath();
-    ctx.moveTo(cx - scale * 0.3, cy - scale * 0.58);
-    ctx.quadraticCurveTo(cx, cy - scale * 0.66, cx + scale * 0.3, cy - scale * 0.58);
-    ctx.lineTo(cx + scale * 0.2, cy + scale * 0.2);
-    ctx.quadraticCurveTo(cx, cy + scale * 0.3, cx - scale * 0.2, cy + scale * 0.2);
+    ctx.moveTo(shoulderL[0], shoulderL[1]);
+    ctx.quadraticCurveTo(chest[0], chest[1] - s * 0.06, shoulderR[0], shoulderR[1]);
+    ctx.quadraticCurveTo(hx + s * 0.16, hy - s * 0.22, hipR[0], hipR[1] + s * 0.04);
+    ctx.quadraticCurveTo(hx, hy + s * 0.08, hipL[0], hipL[1] + s * 0.04);
+    ctx.quadraticCurveTo(hx - s * 0.16, hy - s * 0.22, shoulderL[0], shoulderL[1]);
     ctx.closePath();
     ctx.fill();
 
-    // A guard: one arm up across the body.
-    ctx.lineWidth = scale * 0.14;
-    ctx.lineCap = 'round';
-    ctx.strokeStyle = alpha(Palette.ink900, 0.9);
+    // Neck and head.
+    ctx.lineWidth = s * 0.075;
+    strokeChain(ctx, [chest, neck]);
     ctx.beginPath();
-    ctx.moveTo(cx - scale * 0.28, cy - scale * 0.52);
-    ctx.lineTo(cx - scale * 0.46, cy - scale * 0.2);
-    ctx.lineTo(cx - scale * 0.16, cy - scale * 0.34);
-    ctx.stroke();
+    ctx.arc(head[0], head[1], headR, 0, TAU);
+    ctx.fill();
+
+    // Arms, folded into a guard.
+    ctx.lineWidth = s * 0.082;
+    strokeChain(ctx, [shoulderL, elbowL, handL]);
+    strokeChain(ctx, [shoulderR, elbowR, handR]);
+
+    // Fists.
+    ctx.beginPath();
+    ctx.arc(handL[0], handL[1], s * 0.052, 0, TAU);
+    ctx.arc(handR[0], handR[1], s * 0.055, 0, TAU);
+    ctx.fill();
 
     ctx.restore();
 
-    // A rim of light down the figure's leading edge, matching the fight scene.
+    // Rim light down the leading edge, matching the fight scene's lighting.
     ctx.save();
-    ctx.globalAlpha = 0.16;
+    ctx.globalAlpha = 0.18;
     ctx.strokeStyle = this.accent;
     ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+
     ctx.beginPath();
-    ctx.arc(cx, cy - scale * 0.78, scale * 0.15, Math.PI * 0.75, Math.PI * 1.6);
+    ctx.arc(head[0], head[1], headR, Math.PI * 0.72, Math.PI * 1.62);
     ctx.stroke();
+
     ctx.beginPath();
-    ctx.moveTo(cx - scale * 0.3, cy - scale * 0.58);
-    ctx.lineTo(cx - scale * 0.2, cy + scale * 0.2);
+    ctx.moveTo(shoulderL[0], shoulderL[1]);
+    ctx.quadraticCurveTo(hx - s * 0.16, hy - s * 0.22, hipL[0], hipL[1]);
     ctx.stroke();
+
+    strokeChain(ctx, [shoulderL, elbowL, handL]);
+    strokeChain(ctx, [hipL, kneeL, footL]);
     ctx.restore();
   }
 
@@ -178,4 +224,12 @@ export class MenuBackdrop {
 
     ctx.restore();
   }
+}
+
+/** Strokes a polyline through a chain of joints. */
+function strokeChain(ctx: CanvasRenderingContext2D, points: [number, number][]): void {
+  ctx.beginPath();
+  ctx.moveTo(points[0][0], points[0][1]);
+  for (let i = 1; i < points.length; i++) ctx.lineTo(points[i][0], points[i][1]);
+  ctx.stroke();
 }

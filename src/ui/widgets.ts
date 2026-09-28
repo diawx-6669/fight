@@ -168,6 +168,8 @@ export interface ButtonOptions {
   primary?: boolean;
   /** Icon glyph drawn to the left of the label. */
   glyph?: 'play' | 'back' | 'gear' | 'user' | 'globe' | 'target' | 'trophy' | 'camera';
+  /** Label alignment. Defaults to left, which suits menu rows. */
+  align?: 'left' | 'center';
 }
 
 export function button(context: WidgetContext, options: ButtonOptions): boolean {
@@ -233,15 +235,29 @@ export function button(context: WidgetContext, options: ButtonOptions): boolean 
   }
 
   // Label.
-  const textX = x + 34 + (options.glyph ? 40 : 0);
-  ctx.textAlign = 'left';
+  const centered = options.align === 'center' || (!options.hint && !options.glyph);
+  const leftPad = 34 + (options.glyph ? 40 : 0);
+  const textX = centered ? x + rect.w / 2 : x + leftPad;
+  const available = rect.w - (centered ? 32 : leftPad + 24);
+
+  ctx.textAlign = centered ? 'center' : 'left';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = options.primary ? Palette.white : mix(Palette.ash200, Palette.white, state.hover);
-  font(ctx, options.hint ? TypeScale.subheading : TypeScale.heading, 'display');
+
+  // Shrink to fit rather than spilling past the plate. A label that runs off
+  // the edge of its own button is the single most obvious sign of a UI that
+  // was never looked at.
+  fitText(
+    ctx,
+    options.label,
+    options.hint ? TypeScale.subheading : TypeScale.heading,
+    available,
+    'display',
+  );
   ctx.fillText(options.label, textX, options.hint ? y + rect.h / 2 - 12 : y + rect.h / 2 + 1);
 
   if (options.hint) {
-    font(ctx, TypeScale.label, 'ui', 500);
+    fitText(ctx, options.hint, TypeScale.label, available, 'ui', 500);
     ctx.fillStyle = Palette.ash400;
     ctx.fillText(options.hint, textX, y + rect.h / 2 + 18);
   }
@@ -722,6 +738,33 @@ export function statBar(
   }
 
   ctx.restore();
+}
+
+/**
+ * Sets a font size that makes `text` fit within `maxWidth`, down to a floor.
+ * Returns the size actually used.
+ */
+export function fitText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  preferred: number,
+  maxWidth: number,
+  face: 'display' | 'ui' = 'display',
+  weight = 700,
+): number {
+  let size = preferred;
+  font(ctx, size, face, weight);
+  if (maxWidth <= 0) return size;
+
+  let width = ctx.measureText(text).width;
+  // A handful of steps is plenty; below 62% of the intended size the label is
+  // unreadable anyway and the layout is what needs fixing.
+  while (width > maxWidth && size > preferred * 0.62) {
+    size -= Math.max(1, preferred * 0.06);
+    font(ctx, size, face, weight);
+    width = ctx.measureText(text).width;
+  }
+  return size;
 }
 
 /** Fades a whole screen in or out; returns the alpha to use. */

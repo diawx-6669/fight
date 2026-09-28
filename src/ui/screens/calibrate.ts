@@ -358,7 +358,7 @@ export class CalibrateScreen extends Screen {
     if (!error) return;
 
     const width = 760;
-    const height = 300;
+    const height = 360;
     const rect: Rect = {
       x: (DESIGN_WIDTH - width) / 2,
       y: (DESIGN_HEIGHT - height) / 2,
@@ -382,9 +382,11 @@ export class CalibrateScreen extends Screen {
     if (
       button(this.context.widgets, {
         id: 'calibrate:retry',
-        rect: { x: DESIGN_WIDTH / 2 - 150, y: rect.y + height - 10, w: 300, h: 76 },
+        // Inside the panel, not hanging off its bottom edge.
+        rect: { x: DESIGN_WIDTH / 2 - 210, y: rect.y + height - 110, w: 420, h: 78 },
         label: 'ПОПРОБОВАТЬ СНОВА',
         primary: true,
+        align: 'center',
       })
     ) {
       this.cameraError = null;

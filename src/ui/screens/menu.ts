@@ -217,7 +217,9 @@ export class MenuScreen extends Screen {
   private drawTrackingStatus(ctx: CanvasRenderingContext2D, appear: number): void {
     const { vision } = this.context;
     const x = DESIGN_WIDTH - 132;
-    const y = DESIGN_HEIGHT - 190;
+    // High enough to clear the camera preview, which is a DOM element pinned
+    // to the bottom-right corner and knows nothing about this layout.
+    const y = DESIGN_HEIGHT - 400;
 
     const active = vision.status.cameraActive;
     const seeing = vision.status.present;
@@ -294,16 +296,13 @@ export class MenuScreen extends Screen {
     }
     ctx.letterSpacing = '0px';
 
-    // Gesture hint, bottom right.
-    ctx.textAlign = 'right';
+    // Gesture hint sits above the stats on the left, well clear of the
+    // preview panel in the opposite corner.
     ctx.fillStyle = Palette.ash500;
-    drawGlyph(ctx, 'camera', DESIGN_WIDTH - 360, y, 12, Palette.ash500);
-    ctx.fillText(
-      'ЩИПОК — ВЫБОР · ОТКРЫТАЯ ЛАДОНЬ — НАЗАД',
-      DESIGN_WIDTH - 132,
-      y,
-    );
+    drawGlyph(ctx, 'camera', 140, y - 34, 11, Palette.ash500);
+    ctx.fillText('ЩИПОК — ВЫБОР · ОТКРЫТАЯ ЛАДОНЬ — НАЗАД', 162, y - 34);
 
+    ctx.letterSpacing = '0px';
     ctx.restore();
   }
 }
