@@ -4,7 +4,7 @@ import { ARENAS, getArena } from '@/game/arenas';
 import { Fighter } from '@/game/fighter';
 import { FighterAnimator } from '@/game/animation';
 import type { GameMode } from '@/game/world';
-import { Camera2D } from '@/render/camera2d';
+import { BASE_PPM, Camera2D, HORIZON_Y } from '@/render/camera2d';
 import { SilhouetteRenderer } from '@/render/silhouette';
 import { ClothSystem } from '@/render/ribbons';
 import { DESIGN_HEIGHT, DESIGN_WIDTH } from '@/render/renderer';
@@ -23,6 +23,21 @@ import { wrapLines } from './mode';
  * them. Vega's reach and Grom's bulk are legible in two seconds of animation
  * and invisible in a still.
  */
+
+/**
+ * Preview framing, derived rather than guessed.
+ *
+ * `worldToScreen` maps the ground plane to `HORIZON_Y + (cameraY - 1.1) * ppm`,
+ * so these constants are chosen together: the feet land at `PREVIEW_FLOOR_Y`,
+ * a full 1.8 m fighter spans roughly 475 px above it, and the whole figure
+ * clears the roster strip along the bottom of the screen.
+ */
+const PREVIEW_ZOOM = 1.45;
+const PREVIEW_CAMERA_X = 1.25;
+const PREVIEW_CAMERA_Y = 0.6;
+const PREVIEW_PPM = BASE_PPM * PREVIEW_ZOOM;
+const PREVIEW_FLOOR_Y = HORIZON_Y + (PREVIEW_CAMERA_Y - 1.1) * PREVIEW_PPM;
+const PREVIEW_CENTER_X = DESIGN_WIDTH / 2 - PREVIEW_CAMERA_X * PREVIEW_PPM;
 
 export class CharacterScreen extends Screen {
   readonly id = 'character' as const;
@@ -141,10 +156,10 @@ export class CharacterScreen extends Screen {
   private drawBackground(ctx: CanvasRenderingContext2D): void {
     const visuals = this.current.visuals;
     const gradient = ctx.createRadialGradient(
-      DESIGN_WIDTH * 0.46,
+      PREVIEW_CENTER_X,
       DESIGN_HEIGHT * 0.45,
       0,
-      DESIGN_WIDTH * 0.46,
+      PREVIEW_CENTER_X,
       DESIGN_HEIGHT * 0.45,
       DESIGN_WIDTH * 0.8,
     );
@@ -154,13 +169,14 @@ export class CharacterScreen extends Screen {
     ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, DESIGN_WIDTH, DESIGN_HEIGHT);
 
-    // A pool of light on the floor under the mannequin.
-    const floorY = DESIGN_HEIGHT * 0.83;
+    // A pool of light on the floor under the mannequin, aligned with where the
+    // camera actually puts its feet rather than with a guessed fraction.
+    const floorY = PREVIEW_FLOOR_Y;
     const pool = ctx.createRadialGradient(
-      DESIGN_WIDTH * 0.46,
+      PREVIEW_CENTER_X,
       floorY,
       0,
-      DESIGN_WIDTH * 0.46,
+      PREVIEW_CENTER_X,
       floorY,
       420,
     );
@@ -170,7 +186,7 @@ export class CharacterScreen extends Screen {
     ctx.globalCompositeOperation = 'lighter';
     ctx.fillStyle = pool;
     ctx.beginPath();
-    ctx.ellipse(DESIGN_WIDTH * 0.46, floorY, 420, 90, 0, 0, TAU);
+    ctx.ellipse(PREVIEW_CENTER_X, floorY, 420, 90, 0, 0, TAU);
     ctx.fill();
     ctx.restore();
 
@@ -181,7 +197,7 @@ export class CharacterScreen extends Screen {
     ctx.textBaseline = 'middle';
     font(ctx, 300, 'display');
     ctx.fillStyle = visuals.rim;
-    ctx.fillText(this.current.name, DESIGN_WIDTH * 0.46, DESIGN_HEIGHT * 0.44);
+    ctx.fillText(this.current.name, PREVIEW_CENTER_X, DESIGN_HEIGHT * 0.38);
     ctx.restore();
   }
 
@@ -191,9 +207,12 @@ export class CharacterScreen extends Screen {
 
     // The mannequin stands slightly left of centre, leaving the right side for
     // the stat panel.
-    this.camera.x = 0.52;
-    this.camera.y = 1.25;
-    this.camera.zoom = 1.18;
+    // Framed so the fighter fills the free space left of the stat panel and
+    // stands clear of the roster strip below. Large enough that build and
+    // reach differences read at a glance — the point of animating it at all.
+    this.camera.x = PREVIEW_CAMERA_X;
+    this.camera.y = PREVIEW_CAMERA_Y;
+    this.camera.zoom = PREVIEW_ZOOM;
 
     ctx.save();
     ctx.globalAlpha = Ease.out(this.appear);
@@ -259,7 +278,12 @@ export class CharacterScreen extends Screen {
         // characters apart at this size, and it stays on-style.
         const cx = rect.x + rect.w / 2;
         const cy = rect.y + rect.h / 2 + 8;
-        ctx.fillStyle = character.visuals.bodyOuter;
+        // Lifted well off the tile colour: a silhouette drawn in the body's
+        // own near-black is invisible against a near-black plate, which made
+        // the whole roster strip read as six identical empty squares.
+        ctx.fillStyle = selected
+          ? mix(character.visuals.bodyInner, character.visuals.rim, 0.42)
+          : mix(character.visuals.bodyInner, character.visuals.rim, 0.24);
         ctx.beginPath();
         ctx.arc(cx, cy - 22, 13 * character.stats.build, 0, TAU);
         ctx.fill();
