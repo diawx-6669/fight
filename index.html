@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
+    <meta name="theme-color" content="#07070b" />
+    <meta name="color-scheme" content="dark" />
+    <meta
+      name="description"
+      content="SHADOWSTRIKE — файтинг, где контроллером становится твоё тело. Камера читает удары, прыжки и уклонения и переносит их в бой в реальном времени."
+    />
+
+    <title>SHADOWSTRIKE</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Rajdhani:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2307070b'/%3E%3Cpath d='M16 4l7 6-3 7 4 5-8 6-8-6 4-5-3-7z' fill='%23ff5a2b'/%3E%3C/svg%3E" />
+  </head>
+
+  <body>
+    <!-- The whole game lives on one canvas; DOM is only chrome around it. -->
+    <div id="app" class="app">
+      <canvas id="stage" class="stage" aria-label="Игровое поле"></canvas>
+
+      <!-- Hidden source element the vision pipeline samples frames from. -->
+      <video id="camera" class="camera-source" playsinline muted autoplay></video>
+
+      <!-- Picture-in-picture preview of what the camera sees. -->
+      <canvas id="mirror" class="mirror" aria-hidden="true"></canvas>
+
+      <noscript>
+        <div class="fatal">
+          <h1>SHADOWSTRIKE</h1>
+          <p>Для игры нужен включённый JavaScript.</p>
+        </div>
+      </noscript>
+    </div>
+
+    <div id="boot" class="boot">
+      <div class="boot__mark">
+        <span class="boot__glyph"></span>
+      </div>
+      <h1 class="boot__title">SHADOWSTRIKE</h1>
+      <p class="boot__tagline">твоё тело — это контроллер</p>
+      <div class="boot__bar"><i id="boot-bar-fill"></i></div>
+      <p id="boot-status" class="boot__status">инициализация…</p>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
