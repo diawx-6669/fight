@@ -2,7 +2,7 @@ import { clamp, TAU } from '@/core/math';
 import { Rng } from '@/core/rng';
 import type { Camera2D } from './camera2d';
 import { DESIGN_HEIGHT, DESIGN_WIDTH } from './renderer';
-import { alpha, Ease, font, Palette } from './theme';
+import { Ease, font, Palette } from './theme';
 
 /**
  * Impact effects: the punctuation of a fight.
