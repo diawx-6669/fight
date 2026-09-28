@@ -163,6 +163,7 @@ server/        релей: комнаты, коды, раздача собран
 npm run typecheck   # строгий TypeScript
 npm run build       # проверка типов + production-сборка
 npm run smoke       # прогон в headless Chromium со скриншотами
+npm run net:check   # сквозная проверка релея: комната → матч → обмен → выход
 ```
 
 `npm run smoke` требует запущенного `npm run preview` и headless Chromium.
