@@ -40,6 +40,9 @@ lerna-debug.log*
 .vite/
 *.tsbuildinfo
 
+# smoke-test screenshots
+.smoke/
+
 # downloaded ML models (fetched at runtime / by script)
 public/models/*.task
 public/models/*.tflite

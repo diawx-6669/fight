@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "SHADOWSTRIKE — a camera-driven shadow fighting game. Your real body is the controller.",
+  "description": "SHADOWSTRIKE \u2014 a camera-driven shadow fighting game. Your real body is the controller.",
   "license": "MIT",
   "engines": {
     "node": ">=20"
@@ -14,7 +14,9 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "server": "node server/index.js",
-    "start": "concurrently -n web,net -c cyan,magenta \"npm:dev\" \"npm:server\""
+    "start": "concurrently -n web,net -c cyan,magenta \"npm:dev\" \"npm:server\"",
+    "fetch:models": "node scripts/fetch-models.mjs",
+    "smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^0.10.22"
