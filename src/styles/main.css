@@ -1,0 +1,301 @@
+/* ---------------------------------------------------------------------------
+   SHADOWSTRIKE — global chrome.
+   The game itself is painted on <canvas>; CSS only styles the frame around it,
+   the boot splash and the camera preview.
+   ------------------------------------------------------------------------- */
+
+:root {
+  /* core palette ---------------------------------------------------------- */
+  --ink-900: #05050a;
+  --ink-800: #07070d;
+  --ink-700: #0c0d16;
+  --ink-600: #141626;
+  --ink-500: #1e2236;
+
+  --ash-400: #5a6076;
+  --ash-300: #8a91a8;
+  --ash-200: #c3c8d8;
+  --paper: #f2f4fb;
+
+  /* accents --------------------------------------------------------------- */
+  --ember: #ff5a2b;
+  --ember-soft: #ff8a5c;
+  --blood: #d92b3f;
+  --frost: #35d6ff;
+  --frost-soft: #8ceaff;
+  --venom: #9dff4f;
+  --gold: #ffc247;
+
+  /* typography ------------------------------------------------------------ */
+  --font-display: 'Bebas Neue', 'Oswald', 'Arial Narrow', sans-serif;
+  --font-ui: 'Rajdhani', 'Segoe UI', system-ui, -apple-system, sans-serif;
+
+  /* metrics --------------------------------------------------------------- */
+  --safe: env(safe-area-inset-bottom, 0px);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--ink-900);
+  color: var(--paper);
+  font-family: var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overscroll-behavior: none;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* --- stage ---------------------------------------------------------------- */
+
+.app {
+  position: fixed;
+  inset: 0;
+  display: block;
+  background:
+    radial-gradient(120% 80% at 50% 0%, #12131f 0%, #07070d 55%, #040409 100%);
+}
+
+.stage {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  cursor: none;
+}
+
+/* Cursor stays visible while the player is still using a mouse. */
+.app[data-pointer='mouse'] .stage {
+  cursor: crosshair;
+}
+
+/* --- camera --------------------------------------------------------------- */
+
+.camera-source {
+  position: absolute;
+  width: 2px;
+  height: 2px;
+  opacity: 0;
+  pointer-events: none;
+  top: -10px;
+  left: -10px;
+}
+
+.mirror {
+  position: absolute;
+  right: 18px;
+  bottom: calc(18px + var(--safe));
+  width: 220px;
+  height: 124px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(4, 4, 9, 0.82);
+  box-shadow:
+    0 18px 48px rgba(0, 0, 0, 0.6),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+  opacity: 0;
+  transform: translateY(8px) scale(0.98);
+  transition: opacity 260ms ease, transform 260ms ease;
+  pointer-events: none;
+  z-index: 4;
+}
+
+.mirror[data-visible='true'] {
+  opacity: 1;
+  transform: none;
+}
+
+/* --- boot splash ---------------------------------------------------------- */
+
+.boot {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  background:
+    radial-gradient(90% 70% at 50% 42%, #14121d 0%, #08080e 60%, #030307 100%);
+  transition: opacity 520ms ease, visibility 520ms ease;
+}
+
+.boot[data-done='true'] {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.boot__mark {
+  width: 84px;
+  height: 84px;
+  display: grid;
+  place-items: center;
+  position: relative;
+}
+
+.boot__mark::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 90, 43, 0.35);
+  animation: pulse-ring 2.4s ease-out infinite;
+}
+
+.boot__glyph {
+  width: 34px;
+  height: 46px;
+  background: linear-gradient(180deg, var(--ember) 0%, var(--blood) 100%);
+  clip-path: polygon(50% 0%, 100% 30%, 78% 58%, 100% 76%, 50% 100%, 0% 76%, 22% 58%, 0% 30%);
+  filter: drop-shadow(0 0 14px rgba(255, 90, 43, 0.6));
+  animation: glyph-breathe 2.4s ease-in-out infinite;
+}
+
+.boot__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: clamp(38px, 8vw, 74px);
+  letter-spacing: 0.14em;
+  line-height: 1;
+  background: linear-gradient(180deg, #ffffff 0%, #9aa2bb 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.boot__tagline {
+  margin: -6px 0 10px;
+  font-size: 13px;
+  letter-spacing: 0.34em;
+  text-transform: uppercase;
+  color: var(--ash-400);
+}
+
+.boot__bar {
+  width: min(320px, 62vw);
+  height: 3px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.07);
+  overflow: hidden;
+}
+
+.boot__bar > i {
+  display: block;
+  height: 100%;
+  width: 0%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--blood), var(--ember), var(--gold));
+  box-shadow: 0 0 12px rgba(255, 90, 43, 0.7);
+  transition: width 320ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.boot__status {
+  margin: 0;
+  min-height: 18px;
+  font-size: 12px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--ash-400);
+}
+
+/* --- fatal ---------------------------------------------------------------- */
+
+.fatal {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 32px;
+  text-align: center;
+  background: var(--ink-900);
+}
+
+.fatal h1 {
+  font-family: var(--font-display);
+  letter-spacing: 0.12em;
+  font-size: 40px;
+  margin: 0;
+}
+
+.fatal p {
+  margin: 0;
+  max-width: 46ch;
+  color: var(--ash-300);
+  line-height: 1.6;
+}
+
+.fatal code {
+  display: block;
+  margin-top: 8px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--ember-soft);
+  font-size: 12px;
+  word-break: break-word;
+}
+
+/* --- animation ------------------------------------------------------------ */
+
+@keyframes pulse-ring {
+  0% {
+    transform: scale(0.72);
+    opacity: 0.9;
+  }
+  70% {
+    transform: scale(1.25);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1.25);
+    opacity: 0;
+  }
+}
+
+@keyframes glyph-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.08);
+    opacity: 0.82;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .boot__mark::before,
+  .boot__glyph {
+    animation: none;
+  }
+  .mirror,
+  .boot {
+    transition: none;
+  }
+}
+
+@media (max-width: 720px) {
+  .mirror {
+    width: 148px;
+    height: 84px;
+    right: 12px;
+    bottom: calc(12px + var(--safe));
+  }
+}
