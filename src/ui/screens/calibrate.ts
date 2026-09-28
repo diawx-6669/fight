@@ -31,6 +31,9 @@ export class CalibrateScreen extends Screen {
   private unsubscribe: (() => void)[] = [];
   private finishedAt = -1;
 
+  /** Seconds since the tracker last produced a usable skeleton. */
+  private blindFor = 0;
+
   constructor(context: ScreenContext) {
     super(context);
   }
@@ -41,6 +44,7 @@ export class CalibrateScreen extends Screen {
     this.nextScreen = (params?.next as string) ?? null;
     this.cameraError = null;
     this.finishedAt = -1;
+    this.blindFor = 0;
 
     const { vision } = this.context;
     this.unsubscribe = [
@@ -76,6 +80,9 @@ export class CalibrateScreen extends Screen {
     super.update(dt);
     this.backdrop.update(dt);
 
+    if (this.context.vision.skeleton.present) this.blindFor = 0;
+    else this.blindFor += dt;
+
     // Give the player a moment to read "готово" before moving on.
     if (this.finishedAt >= 0 && this.elapsed - this.finishedAt > 1.6) {
       this.finishedAt = -1;
@@ -106,6 +113,52 @@ export class CalibrateScreen extends Screen {
     this.drawControls(ctx);
   }
 
+  /**
+   * Why nothing is happening.
+   *
+   * The original build showed a spinner and «ищу тебя…» whatever the cause,
+   * which is the least useful thing it could say: the player has no way to
+   * tell a model that failed to download from a body that is simply too close
+   * to the camera, and the two need opposite responses. Each branch below maps
+   * to a different thing the player should actually do.
+   */
+  private diagnose(): { title: string; hint: string; colour: string } {
+    const { vision } = this.context;
+    const skeleton = vision.skeleton;
+
+    if (!vision.status.cameraActive) {
+      return {
+        title: 'Камера не запущена',
+        hint: 'Разреши доступ к камере и обнови страницу.',
+        colour: Palette.rose,
+      };
+    }
+
+    if (!vision.status.poseReady) {
+      return {
+        title: 'Модель распознавания ещё не загрузилась',
+        hint: 'Это несколько мегабайт. Если висит дольше минуты — проверь интернет.',
+        colour: Palette.gold,
+      };
+    }
+
+    if (!skeleton.hasLandmarks) {
+      return {
+        title: 'Не вижу человека в кадре',
+        hint: 'Встань напротив камеры и добавь света — в темноте модель не находит тело.',
+        colour: Palette.gold,
+      };
+    }
+
+    // The model found a person, but not the hips and shoulders body space is
+    // built from. Almost always means the player is too close.
+    return {
+      title: 'Видно только верх тела',
+      hint: 'Отойди на 2–3 шага назад: в кадр должны попасть плечи, таз и ноги.',
+      colour: Palette.gold,
+    };
+  }
+
   // --- pieces ---------------------------------------------------------------
 
   private drawHeader(ctx: CanvasRenderingContext2D, prompt: string, hint: string): void {
@@ -131,6 +184,46 @@ export class CalibrateScreen extends Screen {
     ctx.restore();
   }
 
+  /** Paints the webcam frame, letterboxed into the panel and dimmed. */
+  private drawCameraFrame(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+  ): void {
+    const video = this.context.vision.camera.video;
+    if (video.readyState < 2 || video.videoWidth === 0) return;
+
+    const videoAspect = video.videoWidth / video.videoHeight;
+    const panelAspect = width / height;
+
+    // Cover, not contain: an empty band inside the panel reads as a bug.
+    let drawWidth = width;
+    let drawHeight = height;
+    if (videoAspect > panelAspect) drawWidth = height * videoAspect;
+    else drawHeight = width / videoAspect;
+
+    const offsetX = x + (width - drawWidth) / 2;
+    const offsetY = y + (height - drawHeight) / 2;
+
+    ctx.save();
+    ctx.globalAlpha = 0.55;
+    if (this.context.settings.mirrored) {
+      // Matches the mirrored landmark coordinates drawn on top of it.
+      ctx.translate(x * 2 + width, 0);
+      ctx.scale(-1, 1);
+    }
+    ctx.drawImage(video, offsetX, offsetY, drawWidth, drawHeight);
+    ctx.restore();
+
+    // Knock the contrast back so the skeleton stays the brightest thing here.
+    ctx.save();
+    ctx.fillStyle = 'rgba(5, 6, 12, 0.45)';
+    ctx.fillRect(x, y, width, height);
+    ctx.restore();
+  }
+
   /**
    * The live skeleton, drawn large and centred.
    * Joints are tinted by confidence, so a limb the model is unsure about
@@ -151,13 +244,38 @@ export class CalibrateScreen extends Screen {
     ctx.rect(x + 10, y + 60, width - 20, height - 80);
     ctx.clip();
 
+    // The live frame, behind the skeleton.
+    //
+    // A panel labelled «КАМЕРА» that shows nothing but a spinner is worse than
+    // no panel: the whole point of this screen is letting the player see how
+    // they are framed, and the advice below ("step back", "add light") is
+    // unactionable if they cannot see what the camera sees.
+    this.drawCameraFrame(ctx, x + 10, y + 60, width - 20, height - 80);
+
     if (!skeleton.present) {
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      font(ctx, TypeScale.body, 'ui', 600);
-      ctx.fillStyle = Palette.ash500;
-      ctx.fillText('ищу тебя…', x + width / 2, y + height / 2);
-      spinner(ctx, x + width / 2, y + height / 2 - 60, 26, this.elapsed, Palette.venom);
+      spinner(ctx, x + width / 2, y + height / 2 - 92, 26, this.elapsed, Palette.venom);
+
+      // Give tracking a couple of seconds before explaining itself — a player
+      // still walking into frame does not need a diagnosis.
+      if (this.blindFor < 2.5) {
+        font(ctx, TypeScale.body, 'ui', 600);
+        ctx.fillStyle = Palette.ash500;
+        ctx.fillText('ищу тебя…', x + width / 2, y + height / 2 - 20);
+        ctx.restore();
+        return;
+      }
+
+      const problem = this.diagnose();
+      font(ctx, TypeScale.subheading, 'display');
+      ctx.fillStyle = problem.colour;
+      ctx.fillText(problem.title, x + width / 2, y + height / 2 - 14);
+
+      font(ctx, TypeScale.label, 'ui', 500);
+      ctx.fillStyle = Palette.ash300;
+      wrapText(ctx, problem.hint, x + width / 2, y + height / 2 + 24, width - 90, 24);
+
       ctx.restore();
       return;
     }
@@ -408,6 +526,26 @@ export class CalibrateScreen extends Screen {
     ) {
       this.context.audio.play('back');
       this.context.pop();
+    }
+
+    // Never leave the player stuck. If tracking has produced nothing for a
+    // while, offer a way past: the default profile is a reasonable average and
+    // sensitivity can be tuned later from the pause menu.
+    if (this.blindFor > 12) {
+      if (
+        button(this.context.widgets, {
+          id: 'calibrate:skip',
+          rect: { x: DESIGN_WIDTH - 480, y: DESIGN_HEIGHT - 132, w: 384, h: 78 },
+          label: 'ПРОПУСТИТЬ',
+          hint: 'Играть с настройками по умолчанию',
+          accent: Palette.gold,
+        })
+      ) {
+        this.context.audio.play('click');
+        this.context.vision.cancelCalibration();
+        if (this.nextScreen) this.context.replace(this.nextScreen as never);
+        else this.context.pop();
+      }
     }
 
     const stage = this.context.vision.calibrator.state.stage;

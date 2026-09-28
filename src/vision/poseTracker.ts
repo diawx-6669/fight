@@ -135,6 +135,8 @@ export class PoseTracker {
     if (!landmarks || landmarks.length < JOINT_COUNT) {
       this.stats.missedFrames++;
       this.stats.lostStreak++;
+      this.skeleton.hasLandmarks = false;
+      this.skeleton.anchorVisibility = 0;
       // Hold the last good skeleton for a few frames: MediaPipe drops the odd
       // frame on motion blur, and blanking the fighter for 30ms looks broken.
       if (this.stats.lostStreak > 6) this.skeleton.present = false;

@@ -103,6 +103,19 @@ export class Skeleton {
   /** True once a pose has been seen; false while the player is out of frame. */
   present = false;
 
+  /**
+   * Whether MediaPipe returned a pose at all this frame.
+   *
+   * Distinct from `present`: the model can find a person and this class can
+   * still reject the frame for lacking a usable reference. The UI needs to
+   * tell those two apart, because the advice is opposite — "step into frame"
+   * versus "step back so your hips are visible".
+   */
+  hasLandmarks = false;
+
+  /** Mean visibility of the hips and shoulders, which body space is built on. */
+  anchorVisibility = 0;
+
   /** Mean visibility over the joints that matter for combat. */
   confidence = 0;
 
@@ -146,6 +159,8 @@ export class Skeleton {
 
   reset(): void {
     this.present = false;
+    this.hasLandmarks = false;
+    this.anchorVisibility = 0;
     this.confidence = 0;
     for (let i = 0; i < JOINT_COUNT; i++) {
       this.joints[i].visibility = 0;
@@ -230,6 +245,7 @@ export function buildSkeleton(
   }
 
   skeleton.timestamp = timestamp;
+  skeleton.hasLandmarks = true;
 
   // 1. Copy into image space, applying the mirror and flipping y so that
   //    "up" is positive — image coordinates grow downward, bodies do not.
@@ -253,6 +269,7 @@ export function buildSkeleton(
   const anchorVisibility =
     (leftHip.visibility + rightHip.visibility + leftShoulder.visibility + rightShoulder.visibility) /
     4;
+  skeleton.anchorVisibility = anchorVisibility;
   if (anchorVisibility < 0.35) {
     skeleton.present = false;
     skeleton.confidence = anchorVisibility;
