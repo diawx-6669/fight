@@ -50,9 +50,9 @@ export class Hud {
   private announcement = '';
   private announcementAge = 99;
   private announcementLife = 1.4;
-  private announcementColor = Palette.paper;
+  private announcementColor: string = Palette.paper;
 
-  announce(text: string, color = Palette.paper, life = 1.4): void {
+  announce(text: string, color: string = Palette.paper, life = 1.4): void {
     this.announcement = text;
     this.announcementAge = 0;
     this.announcementLife = life;

@@ -45,7 +45,7 @@ export class EffectLayer {
 
   /** Screen-wide white flash, decayed each frame. */
   private flashAmount = 0;
-  private flashColor = Palette.white;
+  private flashColor: string = Palette.white;
 
   get count(): number {
     return this.effects.length;
@@ -155,7 +155,7 @@ export class EffectLayer {
   }
 
   /** Full-screen flash. `strength` above ~0.6 is reserved for knockouts. */
-  flash(strength: number, color = Palette.white): void {
+  flash(strength: number, color: string = Palette.white): void {
     this.flashAmount = Math.max(this.flashAmount, clamp(strength, 0, 1));
     this.flashColor = color;
   }
