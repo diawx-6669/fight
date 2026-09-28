@@ -255,6 +255,18 @@ export class MenuScreen extends Screen {
       );
     }
 
+    // Whatever went wrong with the camera is said here, in place, rather than
+    // taking over the screen. The player can still navigate with a mouse.
+    const problem = vision.status.lastError;
+    if (problem) {
+      font(ctx, TypeScale.micro, 'ui', 600);
+      ctx.fillStyle = Palette.rose;
+      ctx.fillText(problem.title, x, y + 46);
+      ctx.fillStyle = Palette.ash400;
+      font(ctx, TypeScale.micro, 'ui', 500);
+      ctx.fillText(problem.hint, x, y + 66);
+    }
+
     ctx.restore();
   }
 

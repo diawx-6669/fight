@@ -160,11 +160,11 @@ export class App {
 
   private wireVisionEvents(): void {
     this.vision.events.on('error', ({ title, hint }) => {
-      log.warn(`camera problem: ${title}`);
-      // Not fatal on its own: the game is playable with a mouse and keyboard,
-      // so this surfaces as a message rather than a dead end.
-      if (this.router.current?.id === 'fight' || this.router.current?.id === 'calibrate') return;
-      this.router.push('error', { title, hint });
+      // Never navigate on a vision problem. The game stays fully playable with
+      // a mouse and keyboard, so replacing whatever the player was doing with
+      // an error screen would take away more than the failure did. The message
+      // is kept on `vision.status.lastError` and surfaced in place instead.
+      log.warn(`vision problem: ${title} — ${hint}`);
     });
   }
 

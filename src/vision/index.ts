@@ -52,6 +52,14 @@ export interface VisionStatus {
   hz: number;
   /** Milliseconds of the last inference. */
   inferenceMs: number;
+  /**
+   * The last problem worth telling the player about, or `null`.
+   *
+   * Kept as state rather than only emitted as an event: a camera that was
+   * refused stays refused, and the title screen needs to be able to say so at
+   * any point, not just in the instant it happened.
+   */
+  lastError: { title: string; hint: string } | null;
 }
 
 export interface VisionOptions {
@@ -84,6 +92,7 @@ export class VisionSystem {
     quality: 0,
     hz: 0,
     inferenceMs: 0,
+    lastError: null,
   };
 
   constructor(private readonly options: VisionOptions) {
@@ -116,6 +125,7 @@ export class VisionSystem {
     try {
       await this.camera.start(deviceId ? { deviceId } : {});
       this.status.cameraActive = true;
+      this.status.lastError = null;
       this.events.emit('ready', { width: this.camera.width, height: this.camera.height });
       return true;
     } catch (error) {
@@ -125,6 +135,7 @@ export class VisionSystem {
           ? error
           : new CameraError('unknown', 'Ошибка камеры', 'Попробуй перезагрузить страницу.', error);
       log.error(cameraError.message, cameraError.cause ?? '');
+      this.status.lastError = { title: cameraError.message, hint: cameraError.hint };
       this.events.emit('error', { title: cameraError.message, hint: cameraError.hint });
       return false;
     }
@@ -164,10 +175,13 @@ export class VisionSystem {
         await Promise.all(work);
       } catch (error) {
         log.error('model load failed', error);
-        this.events.emit('error', {
+        // Not fatal: the menus still work with a mouse, and the player gets a
+        // clear explanation rather than a dead screen.
+        this.status.lastError = {
           title: 'Не удалось загрузить модель распознавания',
           hint: 'Проверь интернет-соединение и обнови страницу.',
-        });
+        };
+        this.events.emit('error', this.status.lastError);
         return;
       }
     }
