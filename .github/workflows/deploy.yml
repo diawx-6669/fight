@@ -48,6 +48,10 @@ jobs:
           VITE_NET_URL: ${{ secrets.NET_URL }}
 
       - uses: actions/configure-pages@v5
+        with:
+          # Включает Pages через API, если он ещё не включён в настройках репо.
+          # Без этого первый запуск падает на «Get Pages site failed».
+          enablement: true
 
       - uses: actions/upload-pages-artifact@v3
         with:
