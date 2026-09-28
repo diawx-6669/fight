@@ -16,7 +16,8 @@
     "server": "node server/index.js",
     "start": "concurrently -n web,net -c cyan,magenta \"npm:dev\" \"npm:server\"",
     "fetch:models": "node scripts/fetch-models.mjs",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "net:check": "node scripts/net-check.mjs"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^0.10.22"
