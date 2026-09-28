@@ -92,7 +92,7 @@ export class PunchDetector implements MotionDetector {
   readonly activeArms = { left: 0, right: 0 };
 
   update(context: MotionContext, state: MotionState): ActionEvent | null {
-    const { skeleton, dt } = context;
+    const { skeleton } = context;
     if (!skeleton.present) {
       this.reset();
       return null;

@@ -61,9 +61,6 @@ const contact = { x: 0, y: 0 };
 export class CombatResolver {
   readonly events = new EventBus<CombatEvents>();
 
-  /** Tracks which attacker/defender pairs already resolved this active window. */
-  private readonly resolvedThisMove = new WeakMap<Fighter, number>();
-
   /**
    * Runs one tick of combat between two fighters.
    * Both directions are evaluated, so simultaneous attacks can trade.

@@ -1,6 +1,6 @@
 import { clamp, damp, lerp } from '@/core/math';
 import { Vec2 } from '@/core/vec2';
-import { HEAD_OFFSET, HIP_HEIGHT } from './constants';
+import { HIP_HEIGHT } from './constants';
 
 /**
  * The fighter's skeleton in world space.

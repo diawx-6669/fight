@@ -11,7 +11,12 @@
  */
 export type Handler<T> = (payload: T) => void;
 
-export type EventMap = Record<string, unknown>;
+/**
+ * Any object type works as an event map. It is deliberately not
+ * `Record<string, unknown>`: an `interface` has no implicit index signature, so
+ * that constraint would reject exactly the declarations this bus exists for.
+ */
+export type EventMap = object;
 
 interface Subscription<T> {
   handler: Handler<T>;
