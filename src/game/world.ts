@@ -422,6 +422,13 @@ export class World {
       const fighter = this.fighters[i];
       const rig = fighter.rig;
 
+      // A remote fighter's rig is written by the network layer from received
+      // snapshots before this runs; animating it here would fight that.
+      if (fighter.controller === 'remote') {
+        fighter.boxes.syncHurtboxes(rig);
+        continue;
+      }
+
       const driveFromCamera =
         fighter.controller === 'local' &&
         skeleton !== null &&

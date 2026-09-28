@@ -2,6 +2,8 @@ import { clamp } from '@/core/math';
 import { QUALITY_PRESETS } from '@/core/device';
 import { MOVES } from '@/game/moves';
 import { World, type GameMode } from '@/game/world';
+import type { NetClient } from '@/net/client';
+import { buildSnapshot, RemoteFighterSync } from '@/net/sync';
 import type { ActionEvent, Technique } from '@/vision/motion/types';
 import { FightScene } from '@/render/scene';
 import { DESIGN_HEIGHT, DESIGN_WIDTH } from '@/render/renderer';
@@ -47,6 +49,15 @@ export class FightScreen extends Screen {
   private stage = 0;
   private finished = false;
 
+  /** Online only. `null` for every local mode. */
+  private net: NetClient | null = null;
+  private readonly remoteSync = new RemoteFighterSync();
+  /** Which fighter slot this client drives. Always 0 offline. */
+  private localSlot: 0 | 1 = 0;
+  private get remoteSlot(): 0 | 1 {
+    return this.localSlot === 0 ? 1 : 0;
+  }
+
   /** Keyboard fallback, for testing and for players who cannot use the camera. */
   private readonly keys = new Set<string>();
   private keyHandlersBound = false;
@@ -71,13 +82,26 @@ export class FightScreen extends Screen {
 
     const settings = context.settings;
 
+    this.net = (params?.net as NetClient) ?? null;
+    this.localSlot = this.net ? ((params?.slot as 0 | 1) ?? 0) : 0;
+    this.remoteSync.reset();
+
+    const playerCharacter = (params?.playerCharacter as string) ?? 'kai';
+    const opponentCharacter = (params?.opponentCharacter as string) ?? 'rei';
+    // In an online match the server decides who is on the left, so the
+    // character in slot 0 is not necessarily this player's.
+    const slot0Character = this.localSlot === 0 ? playerCharacter : opponentCharacter;
+    const slot1Character = this.localSlot === 0 ? opponentCharacter : playerCharacter;
+    const remoteController = this.net ? 'remote' : 'ai';
+
     this.world = new World({
       mode: this.mode,
       arenaId: (params?.arenaId as string) ?? 'dusk-temple',
-      p1CharacterId: (params?.playerCharacter as string) ?? 'kai',
-      p2CharacterId: (params?.opponentCharacter as string) ?? 'rei',
-      p1Controller: 'local',
-      p2Controller: 'ai',
+      p1CharacterId: slot0Character,
+      p2CharacterId: slot1Character,
+      p1Controller: this.localSlot === 0 ? 'local' : remoteController,
+      p2Controller: this.localSlot === 0 ? remoteController : 'local',
+      hitAuthority: this.net ? 'local' : 'shared',
       difficulty: settings.difficulty,
       // Training has no clock and no rounds to lose.
       roundsToWin: this.mode === 'training' ? 99 : settings.roundsToWin,
@@ -92,6 +116,7 @@ export class FightScreen extends Screen {
     this.scene.attach(this.world);
 
     this.wireWorldEvents();
+    this.wireNetEvents();
     this.bindKeys();
 
     void context.vision.startCamera(settings.cameraDeviceId || undefined);
@@ -130,7 +155,35 @@ export class FightScreen extends Screen {
           });
         }
       }),
-      world.events.on('block', (event) => audio.playImpact('hand', event.severity, true)),
+      world.events.on('hit', (event) => {
+        if (this.net && event.attacker.slot === this.localSlot) {
+          this.net.sendHit({
+            mv: event.moveId,
+            dmg: event.damage,
+            x: event.x,
+            y: event.y,
+            zn: event.zone,
+            sv: event.severity,
+            blk: false,
+            cmb: event.comboHits,
+          });
+        }
+      }),
+      world.events.on('block', (event) => {
+        audio.playImpact('hand', event.severity, true);
+        if (this.net && event.attacker.slot === this.localSlot) {
+          this.net.sendHit({
+            mv: event.moveId,
+            dmg: event.damage,
+            x: event.x,
+            y: event.y,
+            zn: event.zone,
+            sv: event.severity,
+            blk: true,
+            cmb: 0,
+          });
+        }
+      }),
       world.events.on('parry', () => audio.play('parry', 1)),
       world.events.on('knockdown', () => audio.play('knockdown', 1)),
       world.events.on('guardBreak', () => audio.play('guardBreak', 1)),
@@ -140,7 +193,70 @@ export class FightScreen extends Screen {
     );
   }
 
+  /**
+   * Hooks the socket up to the simulation.
+   *
+   * Incoming hits are applied straight to the local fighter rather than being
+   * re-derived from the opponent's pose. The opponent's client already decided
+   * the hit landed; second-guessing it here is how two machines end up
+   * disagreeing about who won.
+   */
+  private wireNetEvents(): void {
+    const net = this.net;
+    const world = this.world;
+    if (!net || !world) return;
+
+    const local = world.fighters[this.localSlot];
+
+    this.unsubscribe.push(
+      net.events.on('snapshot', (snapshot) => this.remoteSync.push(snapshot)),
+
+      net.events.on('hit', (hit) => {
+        const move = MOVES[hit.mv as Technique];
+        if (!move) return;
+
+        if (hit.blk) {
+          local.applyBlock(hit.dmg, move.blockstun, move.knockback, move.staminaCost * 0.9);
+          this.context.audio.playImpact('hand', hit.sv, true);
+        } else {
+          local.applyHit(
+            hit.dmg,
+            move.hitstun,
+            move.knockback,
+            move.launch,
+            move.knockdown,
+            move.hitstop,
+          );
+          const limb = move.limb.endsWith('Foot') ? 'foot' : 'hand';
+          this.context.audio.playImpact(limb, hit.sv, false);
+        }
+
+        // Effects are driven from the message so the receiving player sees the
+        // same impact their opponent did, in the same place.
+        this.scene?.effects.ring(hit.x, hit.y, hit.sv, Palette.ember);
+        this.scene?.particles.impact(hit.x, hit.y, hit.sv, Palette.gold, 0);
+        world.addShake(hit.sv * 0.14, 10);
+      }),
+
+      net.events.on('opponentLeft', () => {
+        // A disconnect is a forfeit rather than a hang: the player gets a
+        // result screen instead of waiting for an opponent who is gone.
+        world.match.forfeit(this.remoteSlot as 0 | 1);
+      }),
+
+      net.events.on('error', ({ message }) => {
+        this.context.push('error', {
+          title: 'Соединение потеряно',
+          hint: message,
+        });
+      }),
+    );
+  }
+
   exit(): void {
+    this.net?.disconnect();
+    this.net?.dispose();
+    this.net = null;
     for (const off of this.unsubscribe) off();
     this.unsubscribe = [];
     this.scene?.detach();
@@ -173,11 +289,11 @@ export class FightScreen extends Screen {
 
     // 1. Feed the simulation the player's held posture every frame. It is a
     //    continuous signal, so there is nothing to queue.
-    world.setMotion(0, vision.motion);
+    world.setMotion(this.localSlot, vision.motion);
     if (settings.keyboardFallback) this.applyKeyboard(world);
 
     // 2. Hand over any actions detected since the last tick.
-    for (const action of this.queued) world.pushAction(0, action);
+    for (const action of this.queued) world.pushAction(this.localSlot, action);
     this.queued.length = 0;
 
     // 3. Advance the simulation in fixed steps. `timeScale` carries the
@@ -193,7 +309,17 @@ export class FightScreen extends Screen {
     // Hopelessly behind: drop the backlog rather than spiral.
     if (steps >= 5) this.accumulator = 0;
 
-    // 4. Pose the fighters for display at the real frame rate.
+    // 4. Online: interpolate the opponent from received snapshots, and send
+    //    our own. Both happen before the visual update so the remote rig is
+    //    already in place when hurtboxes are rebuilt.
+    if (this.net) {
+      this.remoteSync.update(world.fighters[this.remoteSlot], dt);
+      if (this.net.update(dt)) {
+        this.net.sendSnapshot(buildSnapshot(world.fighters[this.localSlot], world.tickCount));
+      }
+    }
+
+    // 5. Pose the fighters for display at the real frame rate.
     world.updateVisuals(dt, vision.skeleton, vision.motion, vision.calibration);
 
     scene.update(dt);
@@ -280,7 +406,7 @@ export class FightScreen extends Screen {
 
   /** Overlays keyboard posture onto the camera's, when any key is held. */
   private applyKeyboard(world: World): void {
-    const motion = world.fighters[0].input.motion;
+    const motion = world.fighters[this.localSlot].input.motion;
     const left = this.keys.has('KeyA') || this.keys.has('ArrowLeft');
     const right = this.keys.has('KeyD') || this.keys.has('ArrowRight');
     const down = this.keys.has('KeyS') || this.keys.has('ArrowDown');
@@ -306,7 +432,7 @@ export class FightScreen extends Screen {
     if (this.finished) return;
     this.finished = true;
 
-    const playerWon = winner === 'p1';
+    const playerWon = winner === (this.localSlot === 0 ? 'p1' : 'p2');
     this.context.audio.play(playerWon ? 'victory' : 'defeat');
 
     const progress = this.context.progress;
@@ -329,8 +455,8 @@ export class FightScreen extends Screen {
         mode: this.mode,
         winner,
         stage: this.stage,
-        playerCharacter: this.world?.p1.character.id,
-        opponentCharacter: this.world?.p2.character.id,
+        playerCharacter: this.world?.fighters[this.localSlot].character.id,
+        opponentCharacter: this.world?.fighters[this.remoteSlot].character.id,
         rounds: this.world?.match.results ?? [],
       });
     }, 2400);
