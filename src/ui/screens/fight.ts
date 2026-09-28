@@ -553,13 +553,25 @@ export class FightScreen extends Screen {
     ctx.lineWidth = 2;
     ctx.stroke();
 
+    // The same distinction calibration makes: the model finding nobody and the
+    // model finding a torso without hips are different problems with opposite
+    // fixes, and a fighter mid-round has no time to work out which one it is.
+    const skeleton = this.context.vision.skeleton;
+    const partial = skeleton.hasLandmarks;
+
     font(ctx, TypeScale.heading, 'display');
     ctx.fillStyle = Palette.rose;
-    ctx.fillText('ВЕРНИСЬ В КАДР', DESIGN_WIDTH / 2, y + 40);
+    ctx.fillText(partial ? 'ОТОЙДИ НАЗАД' : 'ВЕРНИСЬ В КАДР', DESIGN_WIDTH / 2, y + 40);
 
     font(ctx, TypeScale.label, 'ui', 500);
     ctx.fillStyle = Palette.ash300;
-    ctx.fillText('Камера тебя не видит — отойди на пару шагов назад', DESIGN_WIDTH / 2, y + 68);
+    ctx.fillText(
+      partial
+        ? 'Видно только верх тела — нужны плечи, таз и ноги'
+        : 'Камера тебя не видит — встань напротив и добавь света',
+      DESIGN_WIDTH / 2,
+      y + 68,
+    );
 
     ctx.restore();
   }
