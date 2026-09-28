@@ -1,0 +1,64 @@
+name: Deploy to GitHub Pages
+
+# Публикует собранную игру на GitHub Pages при каждом пуше в main.
+#
+# Почему именно Pages: камера работает только в защищённом контексте
+# (https:// или localhost), а Pages выдаёт https из коробки. Одиночная игра,
+# калибровка и управление руками там работают полностью.
+#
+# Онлайн — не работает: Pages раздаёт только статику, а для боя нужен
+# WebSocket-релей (`npm run server`). Подними его отдельно и укажи адрес
+# через секрет NET_URL — например wss://shadowstrike.example.com/ws.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Не отменяем уже идущий деплой: половина выложенной сборки хуже старой.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Проверка типов
+        run: npm run typecheck
+
+      - name: Сборка
+        run: npm run build
+        env:
+          # Пусто — онлайн покажет «нет связи с сервером» вместо тишины.
+          VITE_NET_URL: ${{ secrets.NET_URL }}
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
