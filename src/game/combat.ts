@@ -96,6 +96,22 @@ export class CombatResolver {
     this.checkWhiff(b);
   }
 
+  /**
+   * Resolves only `attacker`'s strikes against `defender`.
+   *
+   * Online matches use this: each client evaluates its own fighter's hits and
+   * reports them, while the opponent's hits arrive as messages rather than
+   * being recomputed locally. Running the full two-way resolution on both
+   * machines would double-count every exchange, because the defender's client
+   * would independently decide it had been hit as well.
+   */
+  resolveOneWay(attacker: Fighter, defender: Fighter, tickCount: number): void {
+    this.syncBoxes(attacker);
+    this.syncBoxes(defender);
+    if (this.canConnect(attacker, defender)) this.apply(attacker, defender, tickCount);
+    this.checkWhiff(attacker);
+  }
+
   /** Refreshes hurtboxes, and the strike capsule during active frames. */
   private syncBoxes(fighter: Fighter): void {
     fighter.boxes.syncHurtboxes(fighter.rig);

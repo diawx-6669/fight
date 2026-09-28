@@ -58,6 +58,13 @@ export interface WorldOptions {
   roundsToWin?: number;
   roundSeconds?: number;
   dynamicDifficulty?: boolean;
+  /**
+   * `shared` resolves both fighters' hits locally — correct for a single
+   * machine. `local` resolves only this client's fighter and expects the
+   * opponent's hits to arrive over the network, which is what online play
+   * needs so an exchange is not counted twice.
+   */
+  hitAuthority?: 'shared' | 'local';
 }
 
 export class World {
@@ -95,8 +102,12 @@ export class World {
   /** Set while the match is paused; the simulation is frozen but visuals continue. */
   paused = false;
 
+  /** Who decides whether a hit landed. See `WorldOptions.hitAuthority`. */
+  readonly hitAuthority: 'shared' | 'local';
+
   constructor(options: WorldOptions) {
     this.mode = options.mode;
+    this.hitAuthority = options.hitAuthority ?? 'shared';
     this.arena = getArena(options.arenaId);
     this.rng = new Rng(hashSeed(options.seed ?? `${Date.now()}`));
 
@@ -288,7 +299,16 @@ export class World {
       fighter.tick(this.fighters[1 - i].x, this.tickCount);
     }
 
-    if (live) this.combat.resolve(this.p1, this.p2, this.tickCount);
+    if (live) {
+      if (this.hitAuthority === 'shared') {
+        this.combat.resolve(this.p1, this.p2, this.tickCount);
+      } else {
+        // Only our own fighter's strikes are evaluated here; theirs arrive as
+        // messages the network layer applies directly.
+        const local = this.localFighter;
+        if (local) this.combat.resolveOneWay(local, this.fighters[1 - local.slot], this.tickCount);
+      }
+    }
     this.combat.separate(this.p1, this.p2, BODY_RADIUS * 2);
 
     this.updateCamera();
