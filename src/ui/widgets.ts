@@ -494,7 +494,7 @@ export function panel(
   ctx: CanvasRenderingContext2D,
   rect: Rect,
   title?: string,
-  accent = Palette.ember,
+  accent: string = Palette.ember,
 ): void {
   ctx.save();
   ctx.fillStyle = 'rgba(6, 7, 14, 0.82)';
@@ -530,7 +530,7 @@ export function sectionTitle(
   y: number,
   width: number,
   text: string,
-  accent = Palette.ember,
+  accent: string = Palette.ember,
 ): void {
   ctx.save();
   ctx.textAlign = 'left';
@@ -666,7 +666,7 @@ export function spinner(
   y: number,
   radius: number,
   time: number,
-  color = Palette.ember,
+  color: string = Palette.ember,
 ): void {
   ctx.save();
   ctx.strokeStyle = alpha(color, 0.18);

@@ -2,7 +2,7 @@ import { clamp, TAU } from '@/core/math';
 import { BONES, Joint, type Skeleton } from '@/vision/skeleton';
 import { assessFraming } from '@/vision/calibration';
 import { DESIGN_HEIGHT, DESIGN_WIDTH } from '@/render/renderer';
-import { alpha, Ease, font, mix, Palette, TypeScale } from '@/render/theme';
+import { Ease, font, mix, Palette, TypeScale } from '@/render/theme';
 import { MenuBackdrop } from '../backdrop';
 import { Screen, type ScreenContext, type ScreenParams } from '../screen';
 import { button, panel, spinner, type Rect } from '../widgets';
