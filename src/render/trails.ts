@@ -30,11 +30,36 @@ interface TrailSample {
 /** Speed below which nothing is drawn at all. */
 const MIN_SPEED = 3.2;
 
+/**
+ * Net distance the limb must have covered across the window, in metres.
+ *
+ * Speed alone is not enough. A planted foot whose IK solution shuffles a
+ * centimetre each frame reads as several metres per second and grows a trail
+ * that never goes anywhere — it just hangs off the ankle. Requiring actual
+ * displacement keeps trails on strikes, where they belong.
+ */
+const MIN_DISPLACEMENT = 0.28;
+
 /** Speed at which the trail reaches full opacity. */
 const FULL_SPEED = 11;
 
 /** How long a sample stays in the trail, in seconds. */
 const TRAIL_LIFE = 0.16;
+
+/** A single-frame jump beyond this many metres is a teleport, not motion. */
+const TELEPORT_DISTANCE = 0.9;
+
+/**
+ * Longest ribbon that will ever be drawn, in metres.
+ *
+ * The procedural animator is allowed to move a limb most of the way to its
+ * target in a single frame — that snap is what makes a strike feel sharp. The
+ * side effect is an apparent limb speed of tens of metres per second, and a
+ * trail sized purely from speed becomes a laser beam crossing the arena. The
+ * trail exists to show where a fist *went*, so it is bounded by the distance a
+ * fist could plausibly have travelled.
+ */
+const MAX_TRAIL_LENGTH = 1.1;
 
 class LimbTrail {
   private readonly samples: RingBuffer<TrailSample>;
@@ -54,10 +79,33 @@ class LimbTrail {
       return;
     }
 
-    const speed = dt > 0 ? Math.hypot(x - this.lastX, y - this.lastY) / dt : 0;
+    const travelled = Math.hypot(x - this.lastX, y - this.lastY);
     this.lastX = x;
     this.lastY = y;
+
+    // A limb cannot cross this much ground in one frame. When it appears to,
+    // the fighter was repositioned — a round reset, a spawn, a camera cut —
+    // and carrying the old samples forward draws a beam across the arena.
+    if (travelled > TELEPORT_DISTANCE) {
+      this.samples.clear();
+      return;
+    }
+
+    const speed = dt > 0 ? travelled / dt : 0;
     this.samples.push({ x, y, speed, time });
+  }
+
+  /** Straight-line distance between the oldest and newest live samples. */
+  displacement(now: number): number {
+    const newest = this.samples.at(0);
+    if (!newest) return 0;
+    let oldest = newest;
+    this.samples.forEach((sample) => {
+      if (now - sample.time > TRAIL_LIFE) return false;
+      oldest = sample;
+      return true;
+    });
+    return Math.hypot(newest.x - oldest.x, newest.y - oldest.y);
   }
 
   /** Peak speed in the retained window — drives opacity and width. */
@@ -80,15 +128,28 @@ class LimbTrail {
   ): void {
     const peak = this.peakSpeed(now);
     if (peak < MIN_SPEED) return;
+    if (this.displacement(now) < MIN_DISPLACEMENT) return;
 
     const intensity = clamp((peak - MIN_SPEED) / (FULL_SPEED - MIN_SPEED), 0, 1);
     const ppm = camera.pixelsPerMetre;
     const screen = { x: 0, y: 0 };
 
     const points: { x: number; y: number; weight: number }[] = [];
+    let accumulated = 0;
+    let previousX = 0;
+    let previousY = 0;
+
     this.samples.forEach((sample, offset) => {
       const age = now - sample.time;
       if (age > TRAIL_LIFE) return false;
+
+      if (offset > 0) {
+        accumulated += Math.hypot(sample.x - previousX, sample.y - previousY);
+        if (accumulated > MAX_TRAIL_LENGTH) return false;
+      }
+      previousX = sample.x;
+      previousY = sample.y;
+
       camera.worldToScreen(sample.x, sample.y, screen);
       points.push({
         x: screen.x,
@@ -96,7 +157,6 @@ class LimbTrail {
         // Weight tapers with age, so the trail narrows behind the limb.
         weight: (1 - age / TRAIL_LIFE) * clamp(sample.speed / FULL_SPEED, 0.2, 1),
       });
-      void offset;
       return true;
     });
 
@@ -104,7 +164,7 @@ class LimbTrail {
 
     // Build the ribbon: offset each point along its own normal.
     const path = new Path2D();
-    const baseWidth = 0.085 * ppm * widthScale;
+    const baseWidth = 0.062 * ppm * widthScale;
     const left: { x: number; y: number }[] = [];
     const right: { x: number; y: number }[] = [];
 
@@ -131,14 +191,14 @@ class LimbTrail {
 
     // A soft outer bloom plus a tight bright core. Two passes, and the core is
     // what actually reads as the edge of the strike.
-    ctx.globalAlpha = intensity * 0.35;
+    ctx.globalAlpha = intensity * 0.26;
     ctx.shadowColor = color;
     ctx.shadowBlur = 18 * intensity;
     ctx.fillStyle = alpha(color, 0.5);
     ctx.fill(path);
 
     ctx.shadowBlur = 0;
-    ctx.globalAlpha = intensity * 0.8;
+    ctx.globalAlpha = intensity * 0.65;
     ctx.fillStyle = color;
     ctx.beginPath();
     ctx.moveTo(points[0].x, points[0].y);

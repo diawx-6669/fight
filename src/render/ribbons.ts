@@ -122,6 +122,39 @@ export class Ribbon {
     for (let iteration = 0; iteration < CONSTRAINT_ITERATIONS; iteration++) {
       this.solveConstraints();
     }
+
+    // Relaxation alone does not converge here, and the error compounds: with
+    // the anchor being dragged across the world every frame and gravity pulling
+    // the whole chain, a few Gauss-Seidel passes left the sash settling at
+    // roughly two and a half times its real length — a 0.62 m strip rendering
+    // as a metre and a half of ribbon trailing across the arena.
+    //
+    // A single follow-the-leader pass from the anchor outward fixes it for
+    // good. It places every point at exactly one segment from its predecessor,
+    // so the strip is length-exact by construction rather than by convergence,
+    // at O(n) and with no stability caveats.
+    this.enforceLength();
+  }
+
+  private enforceLength(): void {
+    for (let i = 1; i < this.points.length; i++) {
+      const previous = this.points[i - 1];
+      const point = this.points[i];
+
+      let dx = point.x - previous.x;
+      let dy = point.y - previous.y;
+      let distance = Math.hypot(dx, dy);
+
+      // Coincident points have no direction to preserve; let the segment hang.
+      if (distance < 1e-6) {
+        dx = 0;
+        dy = -1;
+        distance = 1;
+      }
+
+      point.x = previous.x + (dx / distance) * this.segmentLength;
+      point.y = previous.y + (dy / distance) * this.segmentLength;
+    }
   }
 
   private solveConstraints(): void {

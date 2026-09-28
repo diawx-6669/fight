@@ -164,7 +164,15 @@ export class SilhouetteRenderer {
     }
 
     // --- far limbs ----------------------------------------------------------
-    ctx.fillStyle = options.flat ? '#000000' : mix(visuals.bodyOuter, Palette.ink900, 0.45);
+    const farColor = options.flat ? '#000000' : mix(visuals.bodyOuter, Palette.ink900, 0.45);
+    const rimColor = options.overrideRim ?? visuals.rim;
+    const rimWidth = clamp(ppm * scale * 0.03, 2, 7);
+
+    if (!options.flat) {
+      // Far limbs get a dim rim of their own so they separate from the torso.
+      dilate(ctx, far, mix(farColor, rimColor, 0.35), rimWidth * 0.55, -rimWidth * 0.5 * rig.facing, -rimWidth * 0.4);
+    }
+    ctx.fillStyle = farColor;
     ctx.fill(far, 'nonzero');
 
     // --- body ---------------------------------------------------------------
@@ -175,6 +183,40 @@ export class SilhouetteRenderer {
       return;
     }
 
+    // Rim light, drawn *underneath* the body rather than on top of it.
+    //
+    // The obvious approach — clip to the body and stroke it — does not work
+    // here, because the silhouette is a union of overlapping subpaths and
+    // `stroke` traces every one of them, including the internal seams between
+    // limbs. That renders the fighter as a wireframe.
+    //
+    // Instead the whole shape is dilated (stroke + fill in the same colour,
+    // which grows it by half the line width) and drawn offset behind the body.
+    // The body fill then covers everything except the offset edge, leaving a
+    // clean directional rim with no internal lines at all.
+    dilate(ctx, body, rimColor, rimWidth, -rimWidth * 0.62 * rig.facing, -rimWidth * 0.55);
+
+    // A much weaker cool fill light from the front, so the leading edge does
+    // not vanish against a bright sky.
+    ctx.save();
+    ctx.globalAlpha *= 0.4;
+    dilate(
+      ctx,
+      body,
+      mix(rimColor, Palette.frostSoft, 0.6),
+      rimWidth * 0.5,
+      rimWidth * 0.5 * rig.facing,
+      rimWidth * 0.3,
+    );
+    ctx.restore();
+
+    if (fighter.rage > 0.25) {
+      ctx.save();
+      ctx.globalAlpha *= fighter.rage * 0.6;
+      dilate(ctx, body, Palette.blood, rimWidth * 1.2, 0, 0);
+      ctx.restore();
+    }
+
     const topY = j.head.y - headRadius;
     const bottomY = Math.max(j.footL.y, j.footR.y);
     const gradient = ctx.createLinearGradient(0, topY, 0, bottomY);
@@ -183,10 +225,6 @@ export class SilhouetteRenderer {
     gradient.addColorStop(1, visuals.bodyOuter);
     ctx.fillStyle = gradient;
     ctx.fill(body, 'nonzero');
-
-    // --- rim light ----------------------------------------------------------
-    const rimColor = options.overrideRim ?? visuals.rim;
-    this.drawRim(ctx, body, far, rimColor, rig.facing, ppm * scale, fighter);
 
     // --- head detail --------------------------------------------------------
     this.drawHead(ctx, fighter, headRadius, rimColor);
@@ -202,24 +240,26 @@ export class SilhouetteRenderer {
       ctx.restore();
     }
 
+    // Block and parry flashes use the same dilation trick, for the same reason:
+    // a plain stroke would light up every internal seam.
     if (fighter.flashBlock > 0) {
       ctx.save();
-      ctx.globalAlpha = (fighter.flashBlock / 8) * 0.8 * opacity;
-      ctx.strokeStyle = Palette.frostSoft;
-      ctx.lineWidth = 3.5;
-      ctx.stroke(body);
+      ctx.globalAlpha = (fighter.flashBlock / 8) * 0.9 * opacity;
+      dilate(ctx, body, Palette.frostSoft, 4, 0, 0);
+      ctx.fillStyle = gradient;
+      ctx.fill(body, 'nonzero');
       ctx.restore();
     }
 
     if (fighter.flashParry > 0) {
       ctx.save();
-      ctx.globalCompositeOperation = 'lighter';
-      ctx.globalAlpha = (fighter.flashParry / 14) * 0.9 * opacity;
+      ctx.globalAlpha = (fighter.flashParry / 14) * 1 * opacity;
       ctx.shadowColor = Palette.gold;
       ctx.shadowBlur = 24;
-      ctx.strokeStyle = Palette.gold;
-      ctx.lineWidth = 4;
-      ctx.stroke(body);
+      dilate(ctx, body, Palette.gold, 6, 0, 0);
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = gradient;
+      ctx.fill(body, 'nonzero');
       ctx.restore();
     }
 
@@ -279,69 +319,6 @@ export class SilhouetteRenderer {
     ctx.restore();
   }
 
-  /**
-   * Directional rim light.
-   *
-   * Clipping to the body and stroking an offset copy of the same path leaves
-   * light only along the edges facing the offset direction. One stroke, one
-   * clip, and the figure reads as lit from a specific place.
-   */
-  private drawRim(
-    ctx: CanvasRenderingContext2D,
-    body: Path2D,
-    far: Path2D,
-    color: string,
-    facing: number,
-    pixelScale: number,
-    fighter: Fighter,
-  ): void {
-    const lineWidth = clamp(pixelScale * 0.026, 2, 6);
-    const offset = lineWidth * 0.75;
-
-    ctx.save();
-    ctx.clip(body, 'nonzero');
-
-    // Main rim, from above and behind — the classic backlight.
-    ctx.strokeStyle = color;
-    ctx.lineWidth = lineWidth * 2;
-    ctx.lineJoin = 'round';
-    ctx.globalAlpha = 0.9;
-    ctx.save();
-    ctx.translate(-offset * facing, -offset * 0.8);
-    ctx.stroke(body);
-    ctx.restore();
-
-    // A cooler fill light from the front, much weaker, to keep the front edge
-    // from vanishing entirely against a bright sky.
-    ctx.globalAlpha = 0.28;
-    ctx.strokeStyle = mix(color, Palette.frostSoft, 0.55);
-    ctx.lineWidth = lineWidth;
-    ctx.save();
-    ctx.translate(offset * facing * 1.2, offset * 0.4);
-    ctx.stroke(body);
-    ctx.restore();
-
-    // Bloodied fighters pick up a red wash along the rim.
-    if (fighter.rage > 0.2) {
-      ctx.globalAlpha = fighter.rage * 0.5;
-      ctx.strokeStyle = Palette.blood;
-      ctx.lineWidth = lineWidth * 1.4;
-      ctx.stroke(body);
-    }
-
-    ctx.restore();
-
-    // The far limbs get a much dimmer rim so they stay behind the torso.
-    ctx.save();
-    ctx.clip(far, 'nonzero');
-    ctx.globalAlpha = 0.34;
-    ctx.strokeStyle = color;
-    ctx.lineWidth = lineWidth * 1.2;
-    ctx.translate(-offset * facing, -offset * 0.8);
-    ctx.stroke(far);
-    ctx.restore();
-  }
-
   /** The head: a highlight arc and a single eye glint. */
   private drawHead(
     ctx: CanvasRenderingContext2D,
@@ -369,6 +346,35 @@ export class SilhouetteRenderer {
     ctx.fill();
     ctx.restore();
   }
+}
+
+/**
+ * Draws `path` grown outward by `width`, in one flat colour, at an offset.
+ *
+ * Stroking a path with line width `2w` paints `w` on each side of every edge;
+ * filling it as well covers the interior. Together they produce the original
+ * shape dilated by `w` — the cheapest available substitute for a real path
+ * union, and the only one that does not leave internal seams behind.
+ */
+function dilate(
+  ctx: CanvasRenderingContext2D,
+  path: Path2D,
+  color: string,
+  width: number,
+  offsetX: number,
+  offsetY: number,
+): void {
+  if (width <= 0.1) return;
+  ctx.save();
+  ctx.translate(offsetX, offsetY);
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  ctx.lineWidth = width * 2;
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.stroke(path);
+  ctx.fill(path, 'nonzero');
+  ctx.restore();
 }
 
 // --- path construction ------------------------------------------------------
@@ -401,22 +407,32 @@ function addLimb(
   path.closePath();
 
   // Circles at both ends round the joint off and union away the seam.
+  //
+  // `anticlockwise: true` is load-bearing. The quad above is wound
+  // counter-clockwise on screen, and a default `arc` winds the other way —
+  // under the non-zero fill rule two opposing windings cancel, which punched a
+  // visible hole through every knee and ankle.
   path.moveTo(a.x + radiusA, a.y);
-  path.arc(a.x, a.y, radiusA, 0, TAU);
+  path.arc(a.x, a.y, radiusA, 0, TAU, true);
   path.moveTo(b.x + radiusB, b.y);
-  path.arc(b.x, b.y, radiusB, 0, TAU);
+  path.arc(b.x, b.y, radiusB, 0, TAU, true);
 }
 
 function addJoint(path: Path2D, p: { x: number; y: number }, radius: number): void {
   if (radius <= 0.01) return;
+  // Same winding as every other subpath — see `addLimb`.
   path.moveTo(p.x + radius, p.y);
-  path.arc(p.x, p.y, radius, 0, TAU);
+  path.arc(p.x, p.y, radius, 0, TAU, true);
 }
 
 /**
- * Adds a foot: a short wedge pointing the way the fighter faces.
- * Feet are tiny and almost always in contact with the floor, which makes them
- * one of the strongest cues that a figure is standing rather than floating.
+ * Adds a foot.
+ *
+ * Built from the same tapered-capsule primitive as every other limb rather
+ * than as its own polygon. An earlier version used a four-point wedge, which
+ * wound the opposite way to the capsules around it — and under the non-zero
+ * fill rule two opposing windings cancel, punching a visible hole through the
+ * ankle of every fighter.
  */
 function addFoot(
   path: Path2D,
@@ -429,17 +445,18 @@ function addFoot(
   const dy = foot.y - knee.y;
   const length = Math.hypot(dx, dy) || 1;
 
-  // The foot points along the facing direction, rolled slightly by the shin's
-  // angle so a kicking leg's foot extends with it.
-  const toeX = foot.x + facing * radius * 2.1 + (dx / length) * radius * 0.4;
-  const toeY = foot.y + (dy / length) * radius * 0.3;
-  const heelX = foot.x - facing * radius * 0.9;
+  // The toe leads in the facing direction, carried a little by the shin's
+  // angle so a kicking leg's foot extends along with it.
+  const heelX = foot.x - facing * radius * 0.7;
   const heelY = foot.y;
+  const toeX = foot.x + facing * radius * 1.9 + (dx / length) * radius * 0.3;
+  const toeY = foot.y + (dy / length) * radius * 0.25;
 
-  path.moveTo(heelX, heelY - radius * 0.7);
-  path.lineTo(toeX, toeY - radius * 0.45);
-  path.lineTo(toeX, toeY + radius * 0.5);
-  path.lineTo(heelX, heelY + radius * 0.7);
-  path.closePath();
-  addJoint(path, foot, radius);
+  addLimb(
+    path,
+    { x: heelX, y: heelY },
+    { x: toeX, y: toeY },
+    radius * 0.82,
+    radius * 0.58,
+  );
 }

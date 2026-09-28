@@ -153,7 +153,8 @@ export class Hud {
     if (bar.lag > ratio + 0.001) {
       const lagWidth = width * bar.lag;
       const lagX = mirrored ? x + width - lagWidth : x;
-      ctx.fillStyle = alpha(Palette.blood, 0.75 + bar.flash * 0.25);
+      // Bright enough to read at a glance; this segment is the damage report.
+      ctx.fillStyle = mix(Palette.blood, Palette.rose, 0.35 + bar.flash * 0.5);
       ctx.fillRect(lagX, y, lagWidth, height);
     }
 
