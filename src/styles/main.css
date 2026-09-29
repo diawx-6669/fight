@@ -27,8 +27,8 @@
   --gold: #ffc247;
 
   /* typography ------------------------------------------------------------ */
-  --font-display: 'Bebas Neue', 'Oswald', 'Arial Narrow', sans-serif;
-  --font-ui: 'Rajdhani', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-display: 'Oswald', 'Arial Narrow', sans-serif;
+  --font-ui: 'Exo 2', 'Segoe UI', system-ui, -apple-system, sans-serif;
 
   /* metrics --------------------------------------------------------------- */
   --safe: env(safe-area-inset-bottom, 0px);

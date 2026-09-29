@@ -55,3 +55,6 @@ public/wasm/
 
 # local reproduction scripts
 .repro-*.mjs
+
+# self-hosted web fonts (fetched by `npm run fetch:fonts`)
+public/fonts/

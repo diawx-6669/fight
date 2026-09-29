@@ -54,8 +54,10 @@ export const Semantic = {
 } as const;
 
 export const Fonts = {
-  display: "'Bebas Neue', 'Oswald', 'Arial Narrow', sans-serif",
-  ui: "'Rajdhani', 'Segoe UI', system-ui, sans-serif",
+  // Both faces cover Cyrillic, which the previous pairing did not — every
+  // Russian word in the game was falling back to a system sans.
+  display: "'Oswald', 'Arial Narrow', sans-serif",
+  ui: "'Exo 2', 'Segoe UI', system-ui, sans-serif",
 } as const;
 
 /** Type scale in CSS pixels at a 1080p reference height, scaled by the renderer. */

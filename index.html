@@ -12,10 +12,14 @@
 
     <title>SHADOWSTRIKE</title>
 
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!--
+      Шрифты лежат рядом с игрой: fonts.googleapis.com заблокирован во многих
+      сетях, а без него весь текст съезжает на системный шрифт. Ссылка на
+      Google оставлена вторым слоем — на случай сборки без `npm run assets`.
+    -->
+    <link rel="stylesheet" href="./fonts/fonts.css" />
     <link
-      href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Rajdhani:wght@400;500;600;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Exo+2:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
 
