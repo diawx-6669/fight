@@ -248,7 +248,38 @@ body {
   background: rgba(255, 255, 255, 0.05);
   color: var(--ember-soft);
   font-size: 12px;
+  /* The detail is written as lines; without this it arrives as one paragraph. */
+  white-space: pre-wrap;
   word-break: break-word;
+}
+
+/*
+ * The blank-screen notice, unlike a crash, sits over a game that is still
+ * running — and quite possibly still broken in a way that fixes itself. So it
+ * lets a little of the canvas through and can be dismissed.
+ */
+#blank-screen {
+  background: rgba(7, 7, 11, 0.9);
+}
+
+.fatal button {
+  margin-top: 18px;
+  padding: 12px 28px;
+  border: 1px solid var(--ember);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--paper);
+  font-family: var(--font-ui);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.fatal button:hover {
+  background: rgba(255, 90, 43, 0.18);
 }
 
 /* --- animation ------------------------------------------------------------ */

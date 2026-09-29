@@ -99,7 +99,14 @@ export class SilhouetteRenderer {
     const ppm = camera.pixelsPerMetre;
     const scale = rig.proportions.scale;
 
-    this.projectJoints(rig, camera);
+    // A rig with a non-finite joint is not merely ugly, it is fatal: the very
+    // next `createRadialGradient` throws `The provided double value is
+    // non-finite`, and the exception unwinds out of the frame before the HUD
+    // is drawn. One bad number in one limb takes down the whole render.
+    //
+    // Skipping the fighter costs a frame of them. Throwing costs the game.
+    if (!this.projectJoints(rig, camera)) return;
+
     const width = (metres: number) => metres * scale * ppm;
 
     // --- floor contact shadow ----------------------------------------------
@@ -266,14 +273,17 @@ export class SilhouetteRenderer {
     ctx.restore();
   }
 
-  /** Projects every rig joint into screen space once per draw. */
-  private projectJoints(rig: FighterRig, camera: Camera2D): void {
+  /** Projects the rig into screen space; `false` means it was not drawable. */
+  private projectJoints(rig: FighterRig, camera: Camera2D): boolean {
+    let ok = true;
     for (const name of Object.keys(this.joints) as RigJoint[]) {
       const world = rig.joints[name];
       camera.worldToScreen(world.x, world.y, screen);
+      if (!Number.isFinite(screen.x) || !Number.isFinite(screen.y)) ok = false;
       this.joints[name].x = screen.x;
       this.joints[name].y = screen.y;
     }
+    return ok;
   }
 
   /**

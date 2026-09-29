@@ -23,6 +23,7 @@ import { ModeScreen } from '@/ui/screens/mode';
 import { PauseScreen } from '@/ui/screens/pause';
 import { ResultsScreen } from '@/ui/screens/results';
 import { SettingsScreen } from '@/ui/screens/settings';
+import { BlankFrameWatch } from '@/core/blankwatch';
 
 const log = createLogger('app');
 
@@ -260,6 +261,15 @@ export class App {
   private frameErrors = 0;
 
   /**
+   * Catches a screen that is born black. See `core/blankwatch` — the short
+   * version is that Canvas 2D fails silently, so the game checks its own
+   * output rather than waiting for someone to report a black rectangle.
+   */
+  private readonly blankWatch = new BlankFrameWatch();
+  private watchedScreen: unknown = null;
+  private blankReported = false;
+
+  /**
    * Runs a frame, and refuses to fail silently.
    *
    * The loop re-arms its animation frame before calling this, so an exception
@@ -322,6 +332,48 @@ export class App {
     document.body.append(container);
   }
 
+  /**
+   * Tells the player their screen is black, and why it might be.
+   *
+   * Deliberately not fatal: the game keeps running underneath, because most
+   * of the causes repair themselves within a frame or two now, and a panel
+   * that can be dismissed is better than a loop that has been stopped. What
+   * matters is that "the game doesn't work" becomes a sentence someone can
+   * act on.
+   */
+  private reportBlankScreen(): void {
+    const quality = this.settings.quality;
+    const camera = this.vision.status.cameraActive ? 'камера включена' : 'камера выключена';
+    log.error(`blank screen detected (quality=${quality}, ${camera})`);
+
+    if (document.getElementById('blank-screen')) return;
+
+    const container = document.createElement('div');
+    container.id = 'blank-screen';
+    container.className = 'fatal';
+
+    const heading = document.createElement('h1');
+    heading.textContent = 'Экран пустой';
+
+    const paragraph = document.createElement('p');
+    paragraph.textContent =
+      'Игра работает, но ничего не рисует. Обнови страницу, а если повторится — ' +
+      'открой настройки и поставь качество «низкое»: чаще всего дело в нём.';
+
+    const detail = document.createElement('code');
+    detail.textContent = `качество: ${quality}\n${camera}\nэкран: ${
+      this.router.current?.constructor.name ?? 'нет'
+    }`;
+
+    const dismiss = document.createElement('button');
+    dismiss.type = 'button';
+    dismiss.textContent = 'Понятно';
+    dismiss.addEventListener('click', () => container.remove());
+
+    container.append(heading, paragraph, detail, dismiss);
+    document.body.append(container);
+  }
+
   private frameInner(dt: number): void {
     const clamped = Math.min(dt, 0.1);
     this.time += clamped;
@@ -369,7 +421,19 @@ export class App {
       this.vision.status.quality,
     );
 
-    // 7. Performance governor.
+    // 7. Did any of that actually reach the screen?
+    if (this.router.current !== this.watchedScreen) {
+      this.watchedScreen = this.router.current;
+      this.blankWatch.reset();
+      this.blankReported = false;
+    }
+    this.blankWatch.update(this.renderer.canvas, clamped);
+    if (this.blankWatch.blank && !this.blankReported) {
+      this.blankReported = true;
+      this.reportBlankScreen();
+    }
+
+    // 8. Performance governor.
     this.adaptiveQuality.sample(this.loop.stats.fps, performance.now());
   }
 
