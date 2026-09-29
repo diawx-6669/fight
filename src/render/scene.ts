@@ -7,6 +7,7 @@ import type { HitEvent } from '@/game/combat';
 import { BackgroundRenderer } from './background';
 import { Camera2D, HORIZON_Y } from './camera2d';
 import { EffectLayer } from './effects';
+import { ForegroundRenderer } from './foreground';
 import { Hud } from './hud';
 import { ParticleSystem } from './particles';
 import { createPostFxState, PostProcessor } from './postfx';
@@ -73,6 +74,7 @@ interface FighterVisuals {
 export class FightScene {
   readonly camera = new Camera2D();
   readonly background = new BackgroundRenderer();
+  readonly foreground = new ForegroundRenderer();
   readonly weather = new WeatherSystem();
   readonly particles: ParticleSystem;
   readonly effects = new EffectLayer();
@@ -138,7 +140,10 @@ export class FightScene {
     this.quality = quality;
     this.particles.maxParticles = quality.maxParticles;
     this.postfx.setQuality(quality);
-    if (this.world) this.background.setArena(this.world.arena, quality.parallaxLayers);
+    if (this.world) {
+      this.background.setArena(this.world.arena, quality.parallaxLayers);
+      this.foreground.setArena(this.world.arena, quality.bloom);
+    }
   }
 
   /** Attaches to a world, wiring effects to its events. */
@@ -147,6 +152,7 @@ export class FightScene {
     this.world = world;
 
     this.background.setArena(world.arena, this.quality.parallaxLayers);
+    this.foreground.setArena(world.arena, this.quality.bloom);
     this.weather.setArena(world.arena, this.quality.maxParticles / 700);
 
     this.visuals = [
@@ -428,6 +434,9 @@ export class FightScene {
     ctx.restore();
 
     this.effects.draw(ctx, this.camera);
+
+    // In front of the fight, which is the whole point of it.
+    this.foreground.draw(ctx, this.camera);
 
     // Last, because a flare happens in the lens rather than in the world, and
     // everything in the world can therefore sit in front of the light.
