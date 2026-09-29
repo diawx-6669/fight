@@ -345,9 +345,22 @@ export class FightScene {
     state.letterbox = damp(state.letterbox, slowMotion, 0.16, dt);
   }
 
-  draw(): void {
+  /**
+   * Draws the world, and says so when it could not.
+   *
+   * Returning a reason rather than `void` is the whole point. Every way this
+   * method can fail to paint anything — no world attached, no per-fighter
+   * visuals, a camera poisoned by a non-finite number — produces exactly the
+   * same thing on screen: black, with a HUD on top of it, drawn by a method
+   * that never touches the camera. Three different bugs, one indistinguishable
+   * symptom, and nothing in the console. The caller can now put the reason on
+   * screen instead of leaving the player to guess.
+   */
+  draw(): string | null {
     const world = this.world;
-    if (!world || !this.visuals) return;
+    if (!world) return 'сцена не привязана к бою';
+    if (!this.visuals) return 'не созданы визуалы бойцов';
+    if (this.camera.sanitize()) return 'камера получила некорректные числа';
 
     const ctx = this.renderer.ctx;
 
@@ -389,6 +402,8 @@ export class FightScene {
     ctx.restore();
 
     this.effects.draw(ctx, this.camera);
+
+    return null;
   }
 
   /** Draws the parallax backdrop, softened when the quality tier allows it. */

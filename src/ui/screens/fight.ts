@@ -516,14 +516,53 @@ export class FightScreen extends Screen {
     const world = this.world;
     if (!scene || !world) return;
 
-    scene.draw();
+    const blank = scene.draw();
     scene.drawPost();
     scene.drawHud(this.mode !== 'training');
+    if (blank) this.drawBlankSceneNotice(ctx, blank);
 
     if (this.mode === 'survival') this.drawSurvivalStreak(ctx);
     if (!this.context.vision.status.present) this.drawTrackingWarning(ctx);
     if (this.mode === 'training') this.drawTrainingOverlay(ctx);
     if (this.context.settings.debugOverlay) this.drawDebug(ctx);
+  }
+
+  /**
+   * Shown when the scene painted nothing.
+   *
+   * A black screen with a working HUD is the least debuggable thing this game
+   * can do, and "the game doesn't work" is all a player can reasonably report
+   * about it. So the frame says what went wrong and offers the way out, and
+   * the game keeps running underneath in case the fault clears on its own —
+   * which, now that the camera repairs itself, it usually does.
+   */
+  private drawBlankSceneNotice(ctx: CanvasRenderingContext2D, reason: string): void {
+    const width = 720;
+    const height = 180;
+    const x = (DESIGN_WIDTH - width) / 2;
+    const y = (DESIGN_HEIGHT - height) / 2;
+
+    ctx.save();
+    ctx.fillStyle = 'rgba(10, 5, 10, 0.92)';
+    chamferedRect(ctx, x, y, width, height, 18);
+    ctx.fill();
+    ctx.strokeStyle = Palette.gold;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = Palette.gold;
+    font(ctx, 30, 'display', 700);
+    ctx.fillText('СЦЕНА НЕ НАРИСОВАЛАСЬ', DESIGN_WIDTH / 2, y + 56);
+
+    ctx.fillStyle = Palette.paper;
+    font(ctx, 20, 'ui', 500);
+    ctx.fillText(reason, DESIGN_WIDTH / 2, y + 100);
+    ctx.fillStyle = Palette.ash500;
+    font(ctx, 17, 'ui', 400);
+    ctx.fillText('Нажми ESC и зайди в бой заново', DESIGN_WIDTH / 2, y + 138);
+    ctx.restore();
   }
 
   /**

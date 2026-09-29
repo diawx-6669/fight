@@ -10,7 +10,7 @@ import { getDifficulty, DynamicDifficulty, type DifficultyId } from './ai/diffic
 import { personalityFor } from './ai/personality';
 import { getArena, type Arena } from './arenas';
 import { CombatResolver, type HitEvent } from './combat';
-import { BODY_RADIUS, TICK_SECONDS } from './constants';
+import { BODY_RADIUS, GROUND_Y, TICK_SECONDS } from './constants';
 import { Fighter, type ControllerKind } from './fighter';
 import { Match, type MatchEvents, type RoundOutcome } from './match';
 import { retargetToRig, smoothRig } from './poseMapping';
@@ -103,6 +103,13 @@ export class World {
   /** Frames of global slow motion remaining, and its scale. */
   private slowMotionFrames = 0;
   private slowMotionScale = 1;
+
+  /**
+   * How many times a non-finite number had to be repaired.
+   * Non-zero means something upstream is producing garbage; the debug overlay
+   * shows it so the cause can be found instead of guessed at.
+   */
+  badNumberTicks = 0;
 
   /** Camera focus, in world metres — the renderer follows this. */
   readonly focus = { x: 0, y: 1, zoom: 1 };
@@ -343,8 +350,56 @@ export class World {
     }
     this.combat.separate(this.p1, this.p2, BODY_RADIUS * 2);
 
+    this.quarantineBadNumbers();
     this.updateCamera();
     this.updateShake();
+  }
+
+  /**
+   * Catches a fighter whose position has gone non-finite, and puts them back.
+   *
+   * This exists because of how the failure looks rather than how likely it is.
+   * `NaN` spreads: one bad velocity becomes a bad position, which becomes a
+   * bad camera focus, and Canvas 2D answers a non-finite transform by silently
+   * drawing nothing. The player gets a black screen with a working HUD on it
+   * and no error anywhere — the single hardest bug in this codebase to
+   * diagnose from a screenshot, and the one most likely to be reported as
+   * "the game just doesn't work".
+   *
+   * Sixteen comparisons a tick is a small price for never seeing it again.
+   * A repaired fighter loses their momentum and keeps everything else, which
+   * costs the player a fraction of a second and nothing more.
+   */
+  private quarantineBadNumbers(): void {
+    for (let i = 0; i < 2; i++) {
+      const fighter = this.fighters[i];
+      const ok =
+        Number.isFinite(fighter.x) &&
+        Number.isFinite(fighter.y) &&
+        Number.isFinite(fighter.vx) &&
+        Number.isFinite(fighter.vy);
+      if (ok) continue;
+
+      // Home position for this slot: far enough apart to restart cleanly.
+      fighter.x = Number.isFinite(fighter.x) ? fighter.x : (i === 0 ? -1.6 : 1.6);
+      fighter.y = Number.isFinite(fighter.y) ? fighter.y : GROUND_Y;
+      fighter.vx = 0;
+      fighter.vy = 0;
+      this.badNumberTicks++;
+    }
+
+    if (!Number.isFinite(this.focus.x + this.focus.y + this.focus.zoom)) {
+      this.focus.x = 0;
+      this.focus.y = 1;
+      this.focus.zoom = 1;
+      this.badNumberTicks++;
+    }
+
+    if (!Number.isFinite(this.shake.x + this.shake.y)) {
+      this.shake.x = 0;
+      this.shake.y = 0;
+      this.badNumberTicks++;
+    }
   }
 
   private consumeInput(fighter: Fighter, live: boolean): void {
