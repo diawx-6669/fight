@@ -105,6 +105,10 @@ export class App {
     };
 
     this.router = new Router(this.context);
+    this.router.onNavigationError = (error, id) => {
+      log.error(`failed to open screen "${id}"`, error);
+      this.showRuntimeError(error);
+    };
     this.registerScreens();
 
     this.adaptiveQuality = new AdaptiveQuality(
@@ -306,8 +310,8 @@ export class App {
 
     const paragraph = document.createElement('p');
     paragraph.textContent =
-      'Что-то сломалось во время отрисовки. Обнови страницу — а текст ниже ' +
-      'покажи разработчику, по нему видно точное место.';
+      'Что-то сломалось внутри игры. Обнови страницу — а текст ниже покажи ' +
+      'разработчику, по нему видно точное место.';
 
     const detail = document.createElement('code');
     // textContent, never innerHTML: this string comes from an exception and is

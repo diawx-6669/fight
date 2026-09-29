@@ -118,6 +118,15 @@ export class Router {
   private transitionDirection: 1 | -1 = -1;
   private pendingAction: (() => void) | null = null;
 
+  /**
+   * Called when a navigation throws. The app uses it to surface the error
+   * instead of leaving the player looking at nothing.
+   */
+  onNavigationError: ((error: unknown, id: ScreenId) => void) | null = null;
+
+  /** The screen a failed navigation was trying to reach. */
+  private pendingId: ScreenId | null = null;
+
   constructor(private readonly context: ScreenContext) {}
 
   register(id: ScreenId, factory: ScreenFactory): void {
@@ -144,9 +153,10 @@ export class Router {
   }
 
   /** Queues a navigation, which runs once the fade covers the screen. */
-  private schedule(action: () => void): void {
+  private schedule(action: () => void, id: ScreenId | null = null): void {
     if (this.pendingAction) return;
     this.pendingAction = action;
+    this.pendingId = id;
     this.transitionDirection = 1;
   }
 
@@ -157,7 +167,7 @@ export class Router {
       this.stack.push({ screen, params });
       screen.enter(params);
       this.onScreenChanged(screen);
-    });
+    }, id);
   }
 
   replace(id: ScreenId, params?: ScreenParams): void {
@@ -168,7 +178,7 @@ export class Router {
       this.stack.push({ screen, params });
       screen.enter(params);
       this.onScreenChanged(screen);
-    });
+    }, id);
   }
 
   pop(): void {
@@ -194,7 +204,7 @@ export class Router {
       this.stack.push({ screen, params });
       screen.enter(params);
       this.onScreenChanged(screen);
-    });
+    }, id);
   }
 
   private onScreenChanged(screen: Screen): void {
@@ -211,9 +221,23 @@ export class Router {
 
     if (this.transitionDirection === 1 && this.transition >= 1 && this.pendingAction) {
       const action = this.pendingAction;
+      const id = this.pendingId;
       this.pendingAction = null;
-      action();
-      this.transitionDirection = -1;
+      this.pendingId = null;
+
+      // A navigation that throws used to leave the curtain down for good: the
+      // line that lifts it came after the call, and the exception skipped it.
+      // The result was a black screen with nothing in the console loop to
+      // report — it threw once, not every frame. Lifting the curtain in a
+      // `finally` means the worst case is a visibly broken screen rather than
+      // an invisible one.
+      try {
+        action();
+      } catch (error) {
+        this.onNavigationError?.(error, id ?? 'menu');
+      } finally {
+        this.transitionDirection = -1;
+      }
     }
 
     this.current?.update(dt);
