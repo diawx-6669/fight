@@ -116,6 +116,20 @@ export class Skeleton {
   /** Mean visibility of the hips and shoulders, which body space is built on. */
   anchorVisibility = 0;
 
+  /**
+   * True when the hips were not visible and had to be inferred.
+   *
+   * This is the common case, not an edge case: most people play in front of a
+   * laptop on a desk, where the camera sees head, shoulders and arms and
+   * nothing below the ribs. Requiring a full body made the game unplayable for
+   * them, so upper-body tracking is a first-class mode — punches, guard,
+   * parries and slips all work from it. Only kicks genuinely need legs.
+   */
+  upperBodyOnly = false;
+
+  /** True when knees and ankles are visible enough to drive kicks. */
+  legsVisible = false;
+
   /** Mean visibility over the joints that matter for combat. */
   confidence = 0;
 
@@ -161,6 +175,8 @@ export class Skeleton {
     this.present = false;
     this.hasLandmarks = false;
     this.anchorVisibility = 0;
+    this.upperBodyOnly = false;
+    this.legsVisible = false;
     this.confidence = 0;
     for (let i = 0; i < JOINT_COUNT; i++) {
       this.joints[i].visibility = 0;
@@ -211,6 +227,26 @@ export class Skeleton {
     return ids.length === 0 ? 0 : sum / ids.length;
   }
 }
+
+/**
+ * Torso length as a multiple of shoulder width.
+ *
+ * Used to place a hip that the camera cannot see. On adult proportions the
+ * hip-to-shoulder span runs about 1.25 shoulder widths; it varies between
+ * bodies, but calibration normalises everything downstream against the
+ * player's own measured reach, so the constant only has to be close.
+ */
+export const TORSO_PER_SHOULDER = 1.25;
+
+/** Joints that matter when only the upper body is in frame. */
+export const UPPER_BODY_JOINTS: readonly JointId[] = [
+  Joint.LeftShoulder,
+  Joint.RightShoulder,
+  Joint.LeftElbow,
+  Joint.RightElbow,
+  Joint.LeftWrist,
+  Joint.RightWrist,
+];
 
 /** Joints the game refuses to run without — arms, torso and legs. */
 export const CORE_JOINTS: readonly JointId[] = [
@@ -263,34 +299,72 @@ export function buildSkeleton(
   const rightHip = raw[Joint.RightHip];
   const leftShoulder = raw[Joint.LeftShoulder];
   const rightShoulder = raw[Joint.RightShoulder];
+  const nose = raw[Joint.Nose];
 
-  // With the hips or shoulders missing there is no stable frame of reference,
-  // so the whole frame is discarded rather than producing garbage body space.
-  const anchorVisibility =
-    (leftHip.visibility + rightHip.visibility + leftShoulder.visibility + rightShoulder.visibility) /
-    4;
-  skeleton.anchorVisibility = anchorVisibility;
-  if (anchorVisibility < 0.35) {
+  // Shoulders are the one thing this cannot work without: they define both the
+  // scale and the direction of "up" for the whole body space.
+  const shoulderVisibility = (leftShoulder.visibility + rightShoulder.visibility) / 2;
+  const hipVisibility = (leftHip.visibility + rightHip.visibility) / 2;
+  skeleton.anchorVisibility = (shoulderVisibility + hipVisibility) / 2;
+
+  if (shoulderVisibility < 0.4) {
     skeleton.present = false;
-    skeleton.confidence = anchorVisibility;
+    skeleton.confidence = shoulderVisibility;
     return false;
   }
 
-  skeleton.hipX = (leftHip.x + rightHip.x) / 2;
-  skeleton.hipY = (leftHip.y + rightHip.y) / 2;
   skeleton.shoulderX = (leftShoulder.x + rightShoulder.x) / 2;
   skeleton.shoulderY = (leftShoulder.y + rightShoulder.y) / 2;
-
-  const torso = Math.hypot(
-    skeleton.shoulderX - skeleton.hipX,
-    skeleton.shoulderY - skeleton.hipY,
-  );
-  // Guard against a degenerate torso when the player is nearly edge-on.
-  skeleton.torsoLength = Math.max(torso, 0.04);
   skeleton.shoulderWidth = Math.hypot(
     leftShoulder.x - rightShoulder.x,
     leftShoulder.y - rightShoulder.y,
   );
+
+  const hipsVisible = hipVisibility >= 0.45;
+  skeleton.upperBodyOnly = !hipsVisible;
+
+  if (hipsVisible) {
+    skeleton.hipX = (leftHip.x + rightHip.x) / 2;
+    skeleton.hipY = (leftHip.y + rightHip.y) / 2;
+    const torso = Math.hypot(
+      skeleton.shoulderX - skeleton.hipX,
+      skeleton.shoulderY - skeleton.hipY,
+    );
+    // Guard against a degenerate torso when the player is nearly edge-on.
+    skeleton.torsoLength = Math.max(torso, 0.04);
+  } else {
+    // --- infer the hip ----------------------------------------------------
+    //
+    // Scale comes from shoulder width, floored by the head-to-shoulder span.
+    // A player turned side-on collapses their apparent shoulder width towards
+    // zero, which would send the inferred torso — and every threshold derived
+    // from it — to infinity; the head span barely changes with rotation and
+    // stops that happening.
+    const headSpan = Math.hypot(nose.x - skeleton.shoulderX, nose.y - skeleton.shoulderY);
+    const estimated = Math.max(
+      skeleton.shoulderWidth * TORSO_PER_SHOULDER,
+      headSpan * 2.2,
+    );
+    skeleton.torsoLength = clamp(estimated, 0.05, 0.6);
+
+    // The hip sits straight down the body's own axis, which is perpendicular
+    // to the shoulder line — not straight down the image, or every head tilt
+    // would read as a lean.
+    const axisX = rightShoulder.x - leftShoulder.x;
+    const axisY = rightShoulder.y - leftShoulder.y;
+    const axisLength = Math.hypot(axisX, axisY) || 1;
+
+    let downX = -axisY / axisLength;
+    let downY = axisX / axisLength;
+    // Of the two perpendiculars, take the one pointing away from the head.
+    if (downX * (skeleton.shoulderX - nose.x) + downY * (skeleton.shoulderY - nose.y) < 0) {
+      downX = -downX;
+      downY = -downY;
+    }
+
+    skeleton.hipX = skeleton.shoulderX + downX * skeleton.torsoLength;
+    skeleton.hipY = skeleton.shoulderY + downY * skeleton.torsoLength;
+  }
 
   // 2. Rotate into body space so leaning does not read as translation.
   //    The torso axis becomes +y.
@@ -316,17 +390,33 @@ export function buildSkeleton(
 
   const leftAnkle = raw[Joint.LeftAnkle];
   const rightAnkle = raw[Joint.RightAnkle];
-  const nose = raw[Joint.Nose];
-  skeleton.floorY = Math.max(leftAnkle.y, rightAnkle.y);
-  skeleton.standingHeight = Math.max(skeleton.floorY - nose.y, 0.1);
-  skeleton.stanceWidth = Math.abs(leftAnkle.x - rightAnkle.x) * scale;
+  const leftKnee = raw[Joint.LeftKnee];
+  const rightKnee = raw[Joint.RightKnee];
+
+  skeleton.legsVisible =
+    Math.min(leftKnee.visibility, rightKnee.visibility) > 0.5 &&
+    Math.min(leftAnkle.visibility, rightAnkle.visibility) > 0.45;
+
+  if (skeleton.legsVisible) {
+    skeleton.floorY = Math.max(leftAnkle.y, rightAnkle.y);
+    skeleton.standingHeight = Math.max(skeleton.floorY - nose.y, 0.1);
+    skeleton.stanceWidth = Math.abs(leftAnkle.x - rightAnkle.x) * scale;
+  } else {
+    // No floor to measure against. Project one from the hip so anything that
+    // still reads it gets a plausible number rather than a stale one.
+    skeleton.floorY = skeleton.hipY + skeleton.torsoLength * 2.1;
+    skeleton.standingHeight = Math.max(skeleton.floorY - nose.y, 0.1);
+    skeleton.stanceWidth = 0.5;
+  }
 
   // Centre of mass: the torso carries most of the weight, so a simple weighted
   // blend of hips and shoulders tracks balance better than a joint average.
   skeleton.comX = (skeleton.joints[Joint.LeftShoulder].x + skeleton.joints[Joint.RightShoulder].x) * 0.2;
   skeleton.comY = (skeleton.joints[Joint.LeftShoulder].y + skeleton.joints[Joint.RightShoulder].y) * 0.25;
 
-  skeleton.confidence = skeleton.visibilityOf(CORE_JOINTS);
+  skeleton.confidence = skeleton.visibilityOf(
+    skeleton.upperBodyOnly ? UPPER_BODY_JOINTS : CORE_JOINTS,
+  );
   skeleton.present = true;
   return true;
 }

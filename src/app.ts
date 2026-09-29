@@ -252,7 +252,73 @@ export class App {
 
   // --- frame ----------------------------------------------------------------
 
+  /** Consecutive frames that threw. Reset by any frame that completes. */
+  private frameErrors = 0;
+
+  /**
+   * Runs a frame, and refuses to fail silently.
+   *
+   * The loop re-arms its animation frame before calling this, so an exception
+   * here does not stop the game — it just throws again next frame, forever,
+   * leaving a black canvas and no explanation. That is the single worst
+   * failure mode this app has: the player sees nothing and can report nothing.
+   *
+   * So a throw is caught, the canvas transform is repaired (the exception may
+   * have landed between `begin` and `end`), and after a few consecutive
+   * failures the game stops and says what broke.
+   */
   private frame(dt: number): void {
+    try {
+      this.frameInner(dt);
+      this.frameErrors = 0;
+    } catch (error) {
+      this.frameErrors++;
+      log.error(`frame failed (${this.frameErrors})`, error);
+
+      // Whatever the exception did to the save stack, put the context back
+      // into a known state so the error panel is not drawn into a broken one.
+      try {
+        this.renderer.ctx.setTransform(1, 0, 0, 1, 0, 0);
+      } catch {
+        /* nothing more to do */
+      }
+
+      if (this.frameErrors >= 5) {
+        this.loop.stop();
+        this.showRuntimeError(error);
+      }
+    }
+  }
+
+  /** Replaces the black screen with something a person can act on. */
+  private showRuntimeError(error: unknown): void {
+    if (document.getElementById('runtime-error')) return;
+
+    const message = error instanceof Error ? error.message : String(error);
+    const stack = error instanceof Error ? (error.stack ?? '') : '';
+
+    const container = document.createElement('div');
+    container.id = 'runtime-error';
+    container.className = 'fatal';
+
+    const heading = document.createElement('h1');
+    heading.textContent = 'Игра остановилась';
+
+    const paragraph = document.createElement('p');
+    paragraph.textContent =
+      'Что-то сломалось во время отрисовки. Обнови страницу — а текст ниже ' +
+      'покажи разработчику, по нему видно точное место.';
+
+    const detail = document.createElement('code');
+    // textContent, never innerHTML: this string comes from an exception and is
+    // not something to hand to the HTML parser.
+    detail.textContent = `${message}\n\n${stack}`.slice(0, 1200);
+
+    container.append(heading, paragraph, detail);
+    document.body.append(container);
+  }
+
+  private frameInner(dt: number): void {
     const clamped = Math.min(dt, 0.1);
     this.time += clamped;
     this.context.time = this.time;

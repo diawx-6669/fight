@@ -2,10 +2,10 @@ import { clamp, TAU } from '@/core/math';
 import { BONES, Joint, type Skeleton } from '@/vision/skeleton';
 import { assessFraming } from '@/vision/calibration';
 import { DESIGN_HEIGHT, DESIGN_WIDTH } from '@/render/renderer';
-import { Ease, font, mix, Palette, TypeScale } from '@/render/theme';
+import { alpha, Ease, font, mix, Palette, TypeScale } from '@/render/theme';
 import { MenuBackdrop } from '../backdrop';
 import { Screen, type ScreenContext, type ScreenParams } from '../screen';
-import { button, panel, spinner, type Rect } from '../widgets';
+import { button, chamferedRect, panel, spinner, type Rect } from '../widgets';
 
 /**
  * Calibration.
@@ -150,13 +150,50 @@ export class CalibrateScreen extends Screen {
       };
     }
 
-    // The model found a person, but not the hips and shoulders body space is
-    // built from. Almost always means the player is too close.
+    // Upper-body play is supported, so the only remaining failure is the one
+    // thing tracking genuinely cannot do without: both shoulders.
     return {
-      title: 'Видно только верх тела',
-      hint: 'Отойди на 2–3 шага назад: в кадр должны попасть плечи, таз и ноги.',
+      title: 'Не вижу плечи',
+      hint: 'Повернись лицом к камере, чтобы в кадр попали оба плеча.',
       colour: Palette.gold,
     };
+  }
+
+  /** Says which tracking mode is running, and what it costs. */
+  private drawModeBadge(ctx: CanvasRenderingContext2D, x: number, y: number, width: number): void {
+    const skeleton = this.context.vision.skeleton;
+    if (!skeleton.present) return;
+
+    const full = skeleton.legsVisible;
+    const label = full ? 'ВСЁ ТЕЛО' : 'ВЕРХ ТЕЛА';
+    const note = full ? 'доступны все приёмы' : 'удары ногами недоступны';
+    const colour = full ? Palette.venom : Palette.gold;
+
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    font(ctx, TypeScale.micro, 'ui', 700);
+    ctx.letterSpacing = '0.22em';
+    const labelWidth = ctx.measureText(label).width;
+    const pillWidth = labelWidth + 34;
+    const pillX = x + width / 2 - pillWidth / 2;
+
+    ctx.fillStyle = alpha(colour, 0.16);
+    chamferedRect(ctx, pillX, y - 13, pillWidth, 26, 7);
+    ctx.fill();
+    ctx.strokeStyle = alpha(colour, 0.55);
+    ctx.lineWidth = 1.25;
+    ctx.stroke();
+
+    ctx.fillStyle = colour;
+    ctx.fillText(label, x + width / 2, y);
+    ctx.letterSpacing = '0px';
+
+    font(ctx, TypeScale.micro, 'ui', 500);
+    ctx.fillStyle = Palette.ash500;
+    ctx.fillText(note, x + width / 2, y + 22);
+    ctx.restore();
   }
 
   // --- pieces ---------------------------------------------------------------
@@ -345,8 +382,10 @@ export class CalibrateScreen extends Screen {
     ctx.textBaseline = 'middle';
     font(ctx, TypeScale.label, 'ui', 600);
     ctx.fillStyle = framing.ok ? Palette.venom : Palette.gold;
-    ctx.fillText(framing.hint, x + width / 2, y + height - 26);
+    ctx.fillText(framing.hint, x + width / 2, y + height - 44);
     ctx.restore();
+
+    this.drawModeBadge(ctx, x, y + height + 18, width);
   }
 
   private drawProgress(ctx: CanvasRenderingContext2D, progress: number, stage: string): void {

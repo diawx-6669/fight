@@ -81,6 +81,14 @@ export class KickDetector implements MotionDetector {
       return null;
     }
 
+    // No legs in frame, no kicks. Guessing from an inferred hip would produce
+    // phantom kicks every time the player shifted their weight, which is far
+    // worse than the technique simply being unavailable and said so in the UI.
+    if (!skeleton.legsVisible) {
+      this.reset();
+      return null;
+    }
+
     // Both feet in the air means the player is jumping, not kicking.
     if (state.airborne) {
       for (const leg of this.legs) leg.phase = 'idle';

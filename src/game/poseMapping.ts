@@ -91,8 +91,25 @@ export function retargetToRig(
 
   // --- legs ----------------------------------------------------------------
 
-  retargetLeg(rig, skeleton, calibration, 'L', rootX, rootY, influence);
-  retargetLeg(rig, skeleton, calibration, 'R', rootX, rootY, influence);
+  if (skeleton.legsVisible) {
+    retargetLeg(rig, skeleton, calibration, 'L', rootX, rootY, influence);
+    retargetLeg(rig, skeleton, calibration, 'R', rootX, rootY, influence);
+  } else {
+    // The camera never saw these legs. Driving them from an inferred hip would
+    // make the fighter's feet slide and jitter under a body that is otherwise
+    // tracking well, so they hold a stance instead — the crouch and lean above
+    // still move them, because those come from the torso.
+    placeStanceLegs(rig, rootX, rootY);
+  }
+}
+
+/** A planted fighting stance, used when the legs are out of frame. */
+function placeStanceLegs(rig: FighterRig, rootX: number, rootY: number): void {
+  const scale = rig.proportions.scale;
+  const spread = 0.26 * scale;
+  // Bladed: lead foot forward, rear foot back, both flat on the floor.
+  rig.placeLeg('L', rootX + spread * rig.facing, rootY);
+  rig.placeLeg('R', rootX - spread * 1.15 * rig.facing, rootY);
 }
 
 function retargetArm(

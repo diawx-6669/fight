@@ -61,9 +61,16 @@ export class LocomotionDetector implements MotionDetector {
 
     // --- vertical ----------------------------------------------------------
 
-    // Hip height above the floor line, in body units. Both terms come from the
-    // same frame, so camera distance cancels out.
-    const hipAboveFloor = (skeleton.floorY - skeleton.hipY) / skeleton.torsoLength;
+    // Vertical reference, in body units.
+    //
+    // With legs in frame this is hip height above the floor line — both terms
+    // from the same frame, so camera distance cancels out. Without legs there
+    // is no floor to measure against, so shoulder height within the frame
+    // stands in: it moves the same way when the player rises or drops, and
+    // dividing by torso length keeps it scale-free just the same.
+    const hipAboveFloor = skeleton.legsVisible
+      ? (skeleton.floorY - skeleton.hipY) / skeleton.torsoLength
+      : (1 - skeleton.shoulderY) / skeleton.torsoLength;
 
     if (!this.restingHipInitialised) {
       this.restingHipY = hipAboveFloor;
@@ -76,9 +83,11 @@ export class LocomotionDetector implements MotionDetector {
 
     const delta = hipAboveFloor - this.restingHipY;
 
-    // Normalise by the calibrated standing height so a tall player and a short
-    // player need the same *proportional* movement.
-    const scale = Math.max(calibration.standingHipY, 0.8);
+    // Normalise so a tall player and a short player need the same
+    // *proportional* movement. The calibrated standing height only means
+    // anything when the floor was visible; otherwise a fixed reference tuned
+    // for shoulder travel does the job.
+    const scale = skeleton.legsVisible ? Math.max(calibration.standingHipY, 0.8) : 1.2;
     const rise = clamp(delta / (scale * 0.22), 0, 2);
     const drop = clamp(-delta / (scale * 0.3), 0, 2);
 

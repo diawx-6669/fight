@@ -40,6 +40,9 @@ lerna-debug.log*
 .vite/
 *.tsbuildinfo
 
+# headless check bundles
+.tmp/
+
 # smoke-test screenshots
 .smoke/
 

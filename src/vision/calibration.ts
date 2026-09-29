@@ -352,33 +352,40 @@ export function assessFraming(skeleton: Skeleton): FramingAssessment {
   if (!skeleton.present) {
     return { ok: false, hint: 'Тебя не видно — встань перед камерой', distance: 0 };
   }
-  if (skeleton.confidence < 0.55) {
+  if (skeleton.confidence < 0.5) {
     return { ok: false, hint: 'Плохо видно — добавь света в комнате', distance: 0 };
   }
 
-  // Legs are what get cropped first, and the game needs them for kicks.
-  const legsVisible = skeleton.visibilityOf([
-    Joint.LeftKnee,
-    Joint.RightKnee,
-    Joint.LeftAnkle,
-    Joint.RightAnkle,
-  ]);
-  if (legsVisible < 0.45) {
-    return { ok: false, hint: 'Не видно ног — отойди назад от камеры', distance: -1 };
+  const hipX = skeleton.hipX;
+  if (hipX < 0.15) return { ok: false, hint: 'Сместись правее — ты у края кадра', distance: 0 };
+  if (hipX > 0.85) return { ok: false, hint: 'Сместись левее — ты у края кадра', distance: 0 };
+
+  // Upper-body play is supported, not a failure state. Most people sit at a
+  // laptop where the camera never sees below the ribs, and refusing to start
+  // until they find a room where their feet fit in frame is how a camera game
+  // gets uninstalled. Kicks need legs; everything else does not.
+  if (!skeleton.legsVisible) {
+    if (skeleton.shoulderWidth > 0.42) {
+      return { ok: false, hint: 'Слишком близко — сделай шаг назад', distance: -1 };
+    }
+    if (skeleton.shoulderWidth < 0.06) {
+      return { ok: false, hint: 'Слишком далеко — подойди ближе', distance: 1 };
+    }
+    return {
+      ok: true,
+      hint: 'Вижу верх тела — этого хватит. Для ударов ногами отойди дальше',
+      distance: 0,
+    };
   }
 
   if (skeleton.torsoLength > 0.34) {
     return { ok: false, hint: 'Слишком близко — сделай шаг назад', distance: -1 };
   }
-  if (skeleton.torsoLength < 0.1) {
+  if (skeleton.torsoLength < 0.08) {
     return { ok: false, hint: 'Слишком далеко — подойди ближе', distance: 1 };
   }
 
-  const hipX = skeleton.hipX;
-  if (hipX < 0.18) return { ok: false, hint: 'Сместись правее — ты у края кадра', distance: 0 };
-  if (hipX > 0.82) return { ok: false, hint: 'Сместись левее — ты у края кадра', distance: 0 };
-
-  return { ok: true, hint: 'Отлично, держись так', distance: 0 };
+  return { ok: true, hint: 'Отлично, видно целиком', distance: 0 };
 }
 
 // --- persistence -----------------------------------------------------------
