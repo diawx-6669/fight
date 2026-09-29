@@ -6,6 +6,13 @@ import { DESIGN_WIDTH } from './renderer';
 import { alpha, Ease, font, mix, Palette, Semantic, TypeScale } from './theme';
 
 /**
+ * Above this many rounds the win pips stop being information and become
+ * noise. Endless modes ask for a win count they can never reach, and one pip
+ * per win would paper the top of the screen with circles.
+ */
+const MAX_DRAWN_PIPS = 7;
+
+/**
  * The heads-up display.
  *
  * A fighting-game HUD has one job: tell the player, without them looking away
@@ -282,6 +289,13 @@ export class Hud {
     const total = match.rules.roundsToWin;
     const radius = 8;
     const gap = 26;
+
+    // Modes that never end on rounds — training, mainly — ask for an
+    // absurd number of wins so the match cannot finish. Drawing one pip per
+    // win would paper the top of the screen with a hundred circles, which is
+    // exactly what it looked like. A round counter only means anything when
+    // there is a realistic number of rounds to count.
+    if (total > MAX_DRAWN_PIPS) return;
 
     for (let i = 0; i < total; i++) {
       const pipX = mirrored ? x - i * gap - radius : x + i * gap + radius;
