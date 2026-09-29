@@ -171,7 +171,14 @@ export class PostProcessor {
   applyGrade(ctx: CanvasRenderingContext2D, state: PostFxState): void {
     // Grade before the vignette: the vignette is a property of the lens and
     // goes over a graded image, not under one.
-    if (state.gradeStrength > 0.01) {
+    //
+    // Gated on the tier, with the rest of the effects. That is not about cost
+    // — one fill is nothing — but about what the low tier is *for*: a path
+    // built only from plain source-over fills, with no blend mode a driver
+    // could get wrong. When a machine shows a black screen, that path is what
+    // it falls back to, and it is only worth anything if it is genuinely
+    // plain.
+    if (this.quality?.bloom && state.gradeStrength > 0.01) {
       ctx.save();
       ctx.globalCompositeOperation = 'soft-light';
       ctx.globalAlpha = clamp(state.gradeStrength, 0, 1);
@@ -237,7 +244,9 @@ export class PostProcessor {
       ctx.restore();
     }
 
-    if (state.desaturation > 0.02) {
+    // `saturation` is one of the four non-separable blend modes, the group
+    // with the patchiest history across drivers — so it goes with the tier too.
+    if (this.quality?.bloom && state.desaturation > 0.02) {
       // Canvas 2D cannot desaturate directly; a grey overlay in `saturation`
       // blend mode gets close enough and costs one rect.
       ctx.save();

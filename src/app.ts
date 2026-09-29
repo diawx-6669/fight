@@ -131,6 +131,26 @@ export class App {
     });
 
     this.bindInput();
+
+    // A restored context comes back with every cached layer invalid, so the
+    // current screen is rebuilt from scratch rather than drawn into buffers
+    // that no longer exist.
+    this.renderer.onContextRestored = () => {
+      this.router.current?.resume();
+      this.blankWatch.reset();
+      this.blankReported = false;
+    };
+
+    // `?safe=1` is the thing to type when the game is a black rectangle: it
+    // forces the plain renderer before the first frame is ever drawn, which is
+    // both an immediate workaround and a diagnosis — if it works, the fault is
+    // somewhere in the effects path.
+    if (this.safeMode) {
+      log.warn('safe mode requested by url');
+      this.adaptiveQuality.enabled = false;
+      this.settings = { ...this.settings, quality: 'low', autoQuality: false };
+    }
+
     this.applySettings(this.settings);
   }
 
@@ -247,6 +267,11 @@ export class App {
       music: next.musicVolume,
       sfx: next.sfxVolume,
     });
+
+    // The live screen last, so anything holding a settings snapshot from when
+    // it was built gets the new one. Without this the quality governor could
+    // step the tier down and the fight scene would never hear about it.
+    this.router.current?.onSettingsChanged(next);
   }
 
   private applyProgress(next: Progress): void {
@@ -268,6 +293,15 @@ export class App {
   private readonly blankWatch = new BlankFrameWatch();
   private watchedScreen: unknown = null;
   private blankReported = false;
+
+  /**
+   * Whether the game has fallen back to the plain renderer.
+   *
+   * Set either by `?safe=1` — so a player with a black screen has something to
+   * type that works immediately — or automatically the first time a screen
+   * comes up black.
+   */
+  private safeMode = new URLSearchParams(location.search).get('safe') === '1';
 
   /**
    * Runs a frame, and refuses to fail silently.
@@ -342,9 +376,24 @@ export class App {
    * act on.
    */
   private reportBlankScreen(): void {
+    // First a black screen gets one chance to fix itself.
+    //
+    // Nearly everything that can silently paint nothing lives in the effects
+    // path — an offscreen layer that failed to allocate, a blend mode a driver
+    // renders as black, a blit of the canvas onto itself. The low tier uses
+    // none of it. So rather than tell the player their game is broken, the
+    // game drops to the plain renderer and looks again; on the machines where
+    // this happens, the plain renderer works, and the player gets a game
+    // instead of an apology.
+    if (!this.safeMode) {
+      this.enterSafeMode('чёрный кадр');
+      return;
+    }
+
     const quality = this.settings.quality;
     const camera = this.vision.status.cameraActive ? 'камера включена' : 'камера выключена';
-    log.error(`blank screen detected (quality=${quality}, ${camera})`);
+    const brightness = this.blankWatch.lastBrightness;
+    log.error(`blank screen persists in safe mode (quality=${quality}, ${camera})`);
 
     if (document.getElementById('blank-screen')) return;
 
@@ -357,13 +406,20 @@ export class App {
 
     const paragraph = document.createElement('p');
     paragraph.textContent =
-      'Игра работает, но ничего не рисует. Обнови страницу, а если повторится — ' +
-      'открой настройки и поставь качество «низкое»: чаще всего дело в нём.';
+      'Игра работает и считает кадры, но ничего не появляется — даже на самой ' +
+      'простой графике. Обнови страницу. Если повторится, покажи эту табличку: ' +
+      'по ней видно, на чём именно всё встало.';
 
     const detail = document.createElement('code');
-    detail.textContent = `качество: ${quality}\n${camera}\nэкран: ${
-      this.router.current?.constructor.name ?? 'нет'
-    }`;
+    detail.textContent = [
+      `качество: ${quality} (простая графика)`,
+      camera,
+      `экран: ${this.router.current?.constructor.name ?? 'нет'}`,
+      `яркость кадра: ${brightness < 0 ? 'не прочиталась' : brightness.toFixed(2)}`,
+      `холст: ${this.renderer.canvas.width}×${this.renderer.canvas.height} @${this.renderer.viewport.dpr.toFixed(2)}`,
+      `сбоев кадра: ${this.frameErrors}`,
+      this.renderer.contextLost ? 'холст потерял контекст' : 'контекст холста жив',
+    ].join('\n');
 
     const dismiss = document.createElement('button');
     dismiss.type = 'button';
@@ -372,6 +428,32 @@ export class App {
 
     container.append(heading, paragraph, detail, dismiss);
     document.body.append(container);
+  }
+
+  /**
+   * Switches to the plain renderer and stops anything switching back.
+   *
+   * Automatic quality has to be turned off along with it: it samples frame
+   * rate, the plain renderer is fast, and it would cheerfully climb straight
+   * back into whatever was painting nothing.
+   */
+  private enterSafeMode(reason: string): void {
+    if (this.safeMode) return;
+    this.safeMode = true;
+    log.warn(`safe mode: ${reason}`);
+
+    this.adaptiveQuality.enabled = false;
+    this.applySettings({ ...this.settings, quality: 'low', autoQuality: false });
+
+    // Re-arm the watch. If the plain renderer paints, nothing more happens and
+    // the player never learns any of this took place.
+    this.blankWatch.reset();
+    this.blankReported = false;
+
+    // Rebuild whatever the current screen is holding, so the new tier reaches
+    // the systems that only read it when they are created.
+    const current = this.router.current;
+    if (current) current.resume();
   }
 
   private frameInner(dt: number): void {
@@ -402,6 +484,7 @@ export class App {
     this.router.update(clamped);
 
     // 5. Draw.
+    this.renderer.clear();
     this.renderer.begin();
     beginWidgetFrame();
     this.router.draw(this.renderer.ctx);
@@ -427,7 +510,10 @@ export class App {
       this.blankWatch.reset();
       this.blankReported = false;
     }
-    this.blankWatch.update(this.renderer.canvas, clamped);
+    // A lost context is a different failure with a different fix, and the
+    // browser may hand it back on its own. Watching for black through one
+    // would only ever produce a wrong answer.
+    if (!this.renderer.contextLost) this.blankWatch.update(this.renderer.canvas);
     if (this.blankWatch.blank && !this.blankReported) {
       this.blankReported = true;
       this.reportBlankScreen();

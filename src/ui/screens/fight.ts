@@ -1,5 +1,6 @@
 import { clamp } from '@/core/math';
 import { QUALITY_PRESETS } from '@/core/device';
+import type { Settings } from '@/settings';
 import { ARENAS } from '@/game/arenas';
 import { CHARACTERS } from '@/game/characters';
 import { MOVES } from '@/game/moves';
@@ -507,6 +508,15 @@ export class FightScreen extends Screen {
         rounds: this.world?.match.results ?? [],
       });
     }, 2400);
+  }
+
+  override onSettingsChanged(settings: Settings): void {
+    this.scene?.setQuality(QUALITY_PRESETS[settings.quality]);
+    if (this.scene) {
+      this.scene.allowFlashes = settings.flashes;
+      this.scene.allowDamageNumbers = settings.damageNumbers;
+    }
+    this.context.vision.setPoseRate(QUALITY_PRESETS[settings.quality].visionHz);
   }
 
   // --- drawing --------------------------------------------------------------

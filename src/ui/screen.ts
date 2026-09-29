@@ -90,6 +90,17 @@ export abstract class Screen {
   /** Called when the screen above is popped. */
   resume(): void {}
 
+  /**
+   * Called when settings change while this screen is live.
+   *
+   * Needed because a screen can hold systems that were handed a settings
+   * snapshot when they were built. The fight scene is the one that matters:
+   * the quality governor would step the tier down mid-round and the scene
+   * would carry on at the old tier, since nothing told it. A player watching
+   * the frame rate collapse would see the setting change and nothing happen.
+   */
+  onSettingsChanged(_settings: Settings): void {}
+
   update(dt: number): void {
     this.elapsed += dt;
   }

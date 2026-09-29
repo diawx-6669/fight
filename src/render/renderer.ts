@@ -66,6 +66,12 @@ export class Renderer {
   private resizePending = false;
   private observer: ResizeObserver | null = null;
 
+  /** True between `contextlost` and `contextrestored`. Nothing draws then. */
+  contextLost = false;
+
+  /** Called after a restore, so cached offscreen layers can be rebuilt. */
+  onContextRestored: (() => void) | null = null;
+
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
     const ctx = canvas.getContext('2d', {
@@ -77,9 +83,40 @@ export class Renderer {
     });
     if (!ctx) throw new Error('Canvas 2D context unavailable');
     this.ctx = ctx;
+    this.watchForContextLoss();
 
     this.observe();
     this.resize();
+  }
+
+  /**
+   * A 2D canvas can lose its backing store, and when it does it says nothing.
+   *
+   * Browsers drop a canvas's GPU memory under pressure — another tab, a heavy
+   * WebGL job elsewhere on the page, a driver reset. Every draw call after
+   * that succeeds and paints nothing: a black screen with no error anywhere,
+   * which is the hardest failure in this whole project to diagnose from a
+   * screenshot.
+   *
+   * The default action on `contextlost` is to give up permanently. Calling
+   * `preventDefault` asks the browser to restore it instead, and the restore
+   * arrives with every piece of context state reset to defaults — so the
+   * viewport has to be rebuilt and anyone holding cached layers has to be
+   * told.
+   */
+  private watchForContextLoss(): void {
+    this.canvas.addEventListener('contextlost', (event) => {
+      event.preventDefault();
+      this.contextLost = true;
+      log.error('canvas context lost — asking the browser to restore it');
+    });
+
+    this.canvas.addEventListener('contextrestored', () => {
+      this.contextLost = false;
+      log.info('canvas context restored');
+      this.resize();
+      this.onContextRestored?.();
+    });
   }
 
   private observe(): void {
@@ -148,6 +185,31 @@ export class Renderer {
   }
 
   /**
+   * Wipes the canvas. Call once at the top of a frame, and only there.
+   *
+   * Deliberately separate from `begin`, which post-processing calls a second
+   * time mid-frame to get the design-space transform back after reading the
+   * canvas in device pixels. Clearing inside `begin` therefore erases the
+   * scene that was just drawn and leaves the grade and the HUD floating on
+   * black — which is an excellent way to spend an afternoon.
+   *
+   * It used to happen only when there were letterbox bars to paint, on the
+   * reasoning that the scene repaints every pixel anyway. True, and the
+   * consequence was that one bug looked like two: in a 16:9 window a scene
+   * that stopped drawing left its last good frame sitting there and the game
+   * looked frozen; in any other window it went black. Same failure, two
+   * reports, and a test in a 16:9 viewport could not reproduce what the
+   * player was seeing.
+   */
+  clear(): void {
+    const { ctx, viewport } = this;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.scale(viewport.dpr, viewport.dpr);
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, viewport.cssWidth, viewport.cssHeight);
+  }
+
+  /**
    * Begins a frame: resets the transform to design space, so every draw call
    * downstream can work in a fixed 1920x1080 coordinate system.
    */
@@ -155,12 +217,6 @@ export class Renderer {
     const { ctx, viewport } = this;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.scale(viewport.dpr, viewport.dpr);
-
-    // Letterbox bars.
-    if (viewport.stageX > 0.5 || viewport.stageY > 0.5) {
-      ctx.fillStyle = '#000000';
-      ctx.fillRect(0, 0, viewport.cssWidth, viewport.cssHeight);
-    }
 
     ctx.save();
     ctx.translate(viewport.stageX, viewport.stageY);

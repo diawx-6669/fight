@@ -32,7 +32,12 @@ const browser = await chromium.launch({
   ...(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}),
   args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', '--enable-unsafe-swiftshader'],
 });
-const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, permissions: ['camera'] });
+// Deliberately not 16:9. The stage is letterboxed inside whatever shape the
+// window is, and for a long time the canvas was only cleared when there were
+// bars to paint — so a scene that stopped drawing looked frozen in a 16:9
+// window and black in every other one. Testing in 16:9 tested the one shape
+// that could not show the reported bug.
+const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, permissions: ['camera'] });
 const page = await context.newPage();
 
 const errors = [];
@@ -131,6 +136,43 @@ try {
 
   const repairs = await page.evaluate(() => window.shadowstrike.router.current.world.badNumberTicks);
   check('починки были замечены и посчитаны', repairs > 0, `счётчик ${repairs}`);
+
+  // --- the screen that comes up black ---------------------------------------
+  //
+  // Reproduces the shape of the original report exactly: the scene draws
+  // nothing while the HUD carries on over the top of it, because the HUD never
+  // touches the camera. Dropping the per-fighter visuals is the cheapest way
+  // to force that from outside, and it is one of the states `draw` already
+  // refuses to run in.
+  //
+  // What is being tested is not the renderer but the *response*: the game has
+  // to notice, fall back to the plain path by itself, and — when even that is
+  // blank, as it is here — say so instead of sitting there black.
+  console.log('\nСцена, которая рисует пустоту:');
+  await page.evaluate(() => {
+    const scene = window.shadowstrike.router.current.scene;
+    scene.visuals = null;
+    // Keep it null: entering safe mode re-attaches the scene, which would
+    // otherwise quietly repair it and hide the failure being tested.
+    Object.defineProperty(scene, 'visuals', { get: () => null, set: () => {} });
+  });
+
+  // Generous, and deliberately a wait-for rather than a sleep: the watch
+  // samples on the wall clock, and this runs in a software renderer managing a
+  // few frames a second. Two verdicts have to land — one to drop to the plain
+  // renderer, a second to give up on it — and each needs its own window.
+  let reported = true;
+  await page
+    .waitForSelector('#blank-screen', { timeout: 45_000 })
+    .catch(() => { reported = false; });
+
+  check(
+    'игра сама ушла на простую графику',
+    await page.evaluate(() => window.shadowstrike.settings.quality === 'low'),
+    await page.evaluate(() => window.shadowstrike.settings.quality),
+  );
+  check('пустой экран не остался молча пустым', reported);
+  await page.screenshot({ path: join(OUT, 'blackout-reported.png') });
 } catch (error) {
   check('прогон завершился', false, String(error));
 } finally {
