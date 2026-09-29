@@ -5,17 +5,17 @@ import type { Fighter } from '@/game/fighter';
 import type { World } from '@/game/world';
 import type { HitEvent } from '@/game/combat';
 import { BackgroundRenderer } from './background';
-import { Camera2D } from './camera2d';
+import { Camera2D, HORIZON_Y } from './camera2d';
 import { EffectLayer } from './effects';
 import { Hud } from './hud';
 import { ParticleSystem } from './particles';
 import { createPostFxState, PostProcessor } from './postfx';
-import { Renderer } from './renderer';
+import { DESIGN_HEIGHT, DESIGN_WIDTH, Renderer } from './renderer';
 import { ClothSystem } from './ribbons';
 import { SilhouetteRenderer } from './silhouette';
 import { TrailSystem } from './trails';
 import { WeatherSystem } from './weather';
-import { Palette } from './theme';
+import { alpha, Palette } from './theme';
 
 /**
  * The fight scene.
@@ -32,6 +32,14 @@ import { Palette } from './theme';
  * what makes a punch look fast. This is the one place the scene knowingly
  * lies, and it is worth it.
  */
+
+/**
+ * Resolution the backdrop is rendered at before being scaled back up.
+ *
+ * 0.45 is the point where the blur reads as depth rather than as a low-quality
+ * image; much below it the horizon line and the floor rim start to smear.
+ */
+const DEPTH_OF_FIELD_SCALE = 0.45;
 
 export interface SceneOptions {
   renderer: Renderer;
@@ -69,6 +77,21 @@ export class FightScene {
   private bloomBoost = 0;
   /** Momentary lens split, from big hits. */
   private aberrationBoost = 0;
+
+  /** Clock for the drifting light shafts. */
+  private shaftTime = 0;
+
+  /**
+   * Half-resolution canvas the background is drawn into.
+   *
+   * Rendering the backdrop small and scaling it back up costs one blit and
+   * gives a soft, even blur for free, courtesy of the browser's own bilinear
+   * filtering. That is depth of field: the fighters stay razor sharp against a
+   * backdrop that visibly sits behind them, which is most of what separates a
+   * scene that looks composed from one that looks flat.
+   */
+  private readonly backdropLayer = document.createElement('canvas');
+  private readonly backdropCtx = this.backdropLayer.getContext('2d');
 
   /** Tracks the previous frame's foot heights, to place landing dust. */
   private readonly wasAirborne: [boolean, boolean] = [false, false];
@@ -275,6 +298,7 @@ export class FightScene {
 
     this.background.update(dt);
     this.weather.update(dt, this.camera);
+    this.shaftTime += dt;
 
     for (let i = 0; i < 2; i++) {
       const fighter = world.fighters[i];
@@ -327,7 +351,8 @@ export class FightScene {
 
     const ctx = this.renderer.ctx;
 
-    this.background.draw(ctx, this.camera);
+    this.drawBackdrop(ctx);
+    this.drawLightShafts(ctx);
 
     // Weather splits around the fighters: the far half sits behind them so the
     // silhouettes never get lost in the middle of a snowstorm.
@@ -339,6 +364,8 @@ export class FightScene {
     // Draw the fighter further from the camera first. "Further" here means the
     // one on the left, since the virtual camera sits slightly to the right.
     const order = world.p1.x <= world.p2.x ? [0, 1] : [1, 0];
+
+    this.drawFloorReflections(ctx, order);
 
     for (const index of order) {
       const fighter = world.fighters[index];
@@ -362,6 +389,143 @@ export class FightScene {
     ctx.restore();
 
     this.effects.draw(ctx, this.camera);
+  }
+
+  /** Draws the parallax backdrop, softened when the quality tier allows it. */
+  private drawBackdrop(ctx: CanvasRenderingContext2D): void {
+    const backdropCtx = this.backdropCtx;
+
+    // Below "medium" the extra blit is not worth the milliseconds, and a sharp
+    // background is a much smaller loss than a dropped frame.
+    if (!backdropCtx || !this.quality.bloom) {
+      this.background.draw(ctx, this.camera);
+      return;
+    }
+
+    const scale = DEPTH_OF_FIELD_SCALE;
+    const width = Math.round(DESIGN_WIDTH * scale);
+    const height = Math.round(DESIGN_HEIGHT * scale);
+    if (this.backdropLayer.width !== width || this.backdropLayer.height !== height) {
+      this.backdropLayer.width = width;
+      this.backdropLayer.height = height;
+    }
+
+    // Draw in design space, into a smaller buffer.
+    backdropCtx.setTransform(scale, 0, 0, scale, 0, 0);
+    backdropCtx.clearRect(0, 0, DESIGN_WIDTH, DESIGN_HEIGHT);
+    this.background.draw(backdropCtx, this.camera);
+
+    ctx.save();
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(this.backdropLayer, 0, 0, DESIGN_WIDTH, DESIGN_HEIGHT);
+    ctx.restore();
+  }
+
+  /**
+   * Fighters mirrored in the floor.
+   *
+   * The cheapest large upgrade available to a 2D scene. The floor stops being
+   * a painted gradient and becomes a surface the fight is happening *on*, and
+   * it costs one extra silhouette pass under a flipped transform.
+   *
+   * Drawn faint, squashed and darkening with distance: a mirror-perfect
+   * reflection reads as ice, and the arenas are stone, sand and rooftops.
+   */
+  private drawFloorReflections(ctx: CanvasRenderingContext2D, order: number[]): void {
+    const world = this.world;
+    if (!world || !this.visuals || !this.quality.shadowBlur) return;
+
+    const horizon = HORIZON_Y;
+
+    ctx.save();
+    // Confine everything to the floor. Without this the flipped fighter would
+    // appear above the horizon, standing on their own head.
+    ctx.beginPath();
+    ctx.rect(0, horizon, DESIGN_WIDTH, DESIGN_HEIGHT - horizon);
+    ctx.clip();
+
+    // Mirror about the floor line, then foreshorten: a reflection seen at a
+    // low angle is compressed, and the compression is most of what tells the
+    // eye it is lying on a surface rather than hanging in the air.
+    //
+    // The transform has to satisfy y' = horizon·(1 + squash) − squash·y, which
+    // pins the floor line to itself. Translating by `horizon · (1 + squash)`
+    // before the flip is exactly that; getting it wrong by one term drops the
+    // whole reflection off the bottom of the screen, which is what the first
+    // version of this did.
+    const squash = 0.62;
+    ctx.translate(0, horizon * (1 + squash));
+    ctx.scale(1, -squash);
+
+    ctx.globalAlpha = 0.42;
+    for (const index of order) {
+      const fighter = world.fighters[index];
+      this.silhouette.draw(ctx, fighter, this.camera, {
+        glow: 0.35,
+        opacity: 1,
+      });
+    }
+    ctx.restore();
+
+    // Fade the reflection out with distance from the floor line, using the
+    // arena's own ground colour so it dissolves into the surface.
+    const arena = world.arena;
+    const fade = ctx.createLinearGradient(0, horizon, 0, horizon + 360);
+    fade.addColorStop(0, alpha(arena.lighting.ground, 0));
+    fade.addColorStop(0.45, alpha(arena.lighting.ground, 0.45));
+    fade.addColorStop(1, alpha(arena.lighting.ground, 0.94));
+    ctx.save();
+    ctx.fillStyle = fade;
+    ctx.fillRect(0, horizon, DESIGN_WIDTH, 360);
+    ctx.restore();
+  }
+
+  /**
+   * Light shafts from the arena's sun.
+   *
+   * Pure atmosphere, and the single most "expensive-looking" thing a flat
+   * scene can have: the air itself becomes visible. Drawn additively as wedges
+   * that sweep slowly, so the scene breathes instead of sitting still.
+   */
+  private drawLightShafts(ctx: CanvasRenderingContext2D): void {
+    const world = this.world;
+    if (!world || !this.quality.bloom) return;
+
+    const lighting = world.arena.lighting;
+    const sunX = lighting.sunX * DESIGN_WIDTH;
+    const sunY = lighting.sunY * DESIGN_HEIGHT;
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.beginPath();
+    ctx.rect(0, 0, DESIGN_WIDTH, HORIZON_Y + 40);
+    ctx.clip();
+
+    const shafts = 7;
+    for (let i = 0; i < shafts; i++) {
+      // Each shaft drifts at its own rate; the spread keeps them from ever
+      // lining up into a fan, which would read as a graphic rather than light.
+      const phase = this.shaftTime * (0.05 + i * 0.011) + i * 1.7;
+      const angle = Math.PI * 0.5 + Math.sin(phase) * 0.5 + (i - shafts / 2) * 0.13;
+      const width = 0.05 + Math.sin(phase * 1.7) * 0.02;
+      const reach = DESIGN_HEIGHT * 1.5;
+
+      const gradient = ctx.createLinearGradient(sunX, sunY, sunX + Math.cos(angle) * reach, sunY + Math.sin(angle) * reach);
+      gradient.addColorStop(0, alpha(lighting.sun, 0.1));
+      gradient.addColorStop(0.45, alpha(lighting.sun, 0.035));
+      gradient.addColorStop(1, alpha(lighting.sun, 0));
+
+      ctx.fillStyle = gradient;
+      ctx.beginPath();
+      ctx.moveTo(sunX, sunY);
+      ctx.lineTo(sunX + Math.cos(angle - width) * reach, sunY + Math.sin(angle - width) * reach);
+      ctx.lineTo(sunX + Math.cos(angle + width) * reach, sunY + Math.sin(angle + width) * reach);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    ctx.restore();
   }
 
   /** Called after `draw`, with the scene still on the canvas. */
