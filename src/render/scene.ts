@@ -41,6 +41,25 @@ import { alpha, Palette } from './theme';
  */
 const DEPTH_OF_FIELD_SCALE = 0.45;
 
+/** Metres per second below which a body is not moving fast enough to smear. */
+const MOTION_BLUR_SPEED = 3.2;
+
+/** How much of a frame's travel the smear covers. Above 1 it detaches. */
+const MOTION_BLUR_REACH = 0.85;
+
+/**
+ * Lens ghosts, as fractions of the distance from the light to the centre of
+ * frame. The uneven spacing and the mixed sizes are the point: evenly spaced
+ * identical circles read as a pattern, not as glass.
+ */
+const FLARE_GHOSTS = [
+  { at: 0.42, radius: 26, alpha: 0.2, color: '#ffd9a8' },
+  { at: 0.78, radius: 58, alpha: 0.1, color: '#8fd4ff' },
+  { at: 1.15, radius: 34, alpha: 0.14, color: '#ffb0c4' },
+  { at: 1.62, radius: 96, alpha: 0.07, color: '#a8ffd9' },
+  { at: 1.95, radius: 18, alpha: 0.18, color: '#fff3d0' },
+] as const;
+
 export interface SceneOptions {
   renderer: Renderer;
   quality: QualitySettings;
@@ -332,6 +351,14 @@ export class FightScene {
     state.grain = 0.05;
     state.vignette = 0.55;
 
+    // The arena decides the grade. Every arena is built from the same handful
+    // of shapes, so this is most of what makes a rooftop at night and a temple
+    // at dusk read as different places rather than different palettes.
+    const lighting = world.arena.lighting;
+    state.gradeColor = lighting.rim;
+    state.gradeStrength = 0.24;
+    state.exposure = lighting.exposure;
+
     // The screen reacts to the *local* player's condition, not both. In a
     // versus match on one machine there is no single player to react to, so the
     // wash is driven by whoever is closest to losing.
@@ -383,13 +410,12 @@ export class FightScene {
     for (const index of order) {
       const fighter = world.fighters[index];
       const visuals = this.visuals[index];
+      const opacity = fighter.state === 'defeat' ? clamp(1 - fighter.stateFrame / 200, 0.35, 1) : 1;
 
       // Cloth behind the body, then the body, so a sash reads as being worn.
       visuals.cloth.draw(ctx, this.camera, fighter);
-      this.silhouette.draw(ctx, fighter, this.camera, {
-        glow: 1,
-        opacity: fighter.state === 'defeat' ? clamp(1 - fighter.stateFrame / 200, 0.35, 1) : 1,
-      });
+      this.drawMotionBlur(ctx, fighter, opacity);
+      this.silhouette.draw(ctx, fighter, this.camera, { glow: 1, opacity });
       visuals.trails.draw(ctx, this.camera, fighter);
     }
 
@@ -402,6 +428,10 @@ export class FightScene {
     ctx.restore();
 
     this.effects.draw(ctx, this.camera);
+
+    // Last, because a flare happens in the lens rather than in the world, and
+    // everything in the world can therefore sit in front of the light.
+    this.drawLensFlare(ctx);
 
     return null;
   }
@@ -537,6 +567,127 @@ export class FightScene {
       ctx.lineTo(sunX + Math.cos(angle - width) * reach, sunY + Math.sin(angle - width) * reach);
       ctx.lineTo(sunX + Math.cos(angle + width) * reach, sunY + Math.sin(angle + width) * reach);
       ctx.closePath();
+      ctx.fill();
+    }
+
+    ctx.restore();
+  }
+
+  /**
+   * Per-fighter motion blur.
+   *
+   * Real motion blur needs the frame's velocity buffer, which Canvas 2D does
+   * not have. But a fighting game only ever needs it on one thing — a limb
+   * crossing the screen faster than the eye can follow — and for that, a few
+   * copies of the silhouette smeared back along the direction of travel is not
+   * an approximation of the effect, it *is* the effect. It is what a hand-drawn
+   * animator does, and it reads as speed at any frame rate.
+   *
+   * Gated on real movement so a standing fighter never doubles their draw cost,
+   * and on the quality tier so the cost is optional.
+   */
+  private drawMotionBlur(ctx: CanvasRenderingContext2D, fighter: Fighter, opacity: number): void {
+    if (!this.quality.bloom) return;
+
+    // Metres per second at which a body is moving fast enough to smear.
+    const speed = Math.hypot(fighter.vx, fighter.vy);
+    if (!Number.isFinite(speed) || speed < MOTION_BLUR_SPEED) return;
+
+    const strength = clamp((speed - MOTION_BLUR_SPEED) / 6, 0, 1);
+    const samples = strength > 0.55 ? 3 : 2;
+
+    // One frame of travel, backwards: the smear trails the body rather than
+    // leading it, which is the difference between "fast" and "ghosted".
+    const stepX = (-fighter.vx / 60) * MOTION_BLUR_REACH;
+    const stepY = (-fighter.vy / 60) * MOTION_BLUR_REACH;
+    const ppm = this.camera.pixelsPerMetre;
+
+    // The smear takes the fighter's own body colour rather than black: a black
+    // copy vanishes against the ground and only ever shows against the sky,
+    // which makes the effect come and go as the fight moves up and down.
+    const flatColor = fighter.character.visuals.bodyOuter;
+
+    for (let i = samples; i >= 1; i--) {
+      const fade = (1 - i / (samples + 1)) * strength * 0.55;
+      ctx.save();
+      // World metres to design pixels, and screen y is inverted.
+      ctx.translate(stepX * i * ppm, -stepY * i * ppm);
+      this.silhouette.draw(ctx, fighter, this.camera, {
+        glow: 0,
+        flat: true,
+        flatColor,
+        shadow: false,
+        opacity: fade * opacity,
+      });
+      ctx.restore();
+    }
+  }
+
+  /**
+   * Lens flare on the arena's key light.
+   *
+   * The one post effect that says "this image came through a camera" louder
+   * than any other, and the cheapest of them to do honestly: a flare is ghosts
+   * of the aperture strung along the line from the light through the centre of
+   * frame, plus an anamorphic streak across it. Both are gradients.
+   *
+   * Kept quiet on purpose. A flare that announces itself is a 2007 game engine
+   * demo; a flare you only notice when the light is near the middle of the
+   * frame is a lens.
+   */
+  private drawLensFlare(ctx: CanvasRenderingContext2D): void {
+    const world = this.world;
+    if (!world || !this.quality.bloom) return;
+
+    const lighting = world.arena.lighting;
+    const sunX = lighting.sunX * DESIGN_WIDTH;
+    const sunY = lighting.sunY * DESIGN_HEIGHT;
+
+    const centreX = DESIGN_WIDTH / 2;
+    const centreY = DESIGN_HEIGHT / 2;
+
+    // Fades out as the light approaches the edge of frame, the way a real one
+    // does when the source leaves the lens barrel.
+    const offAxis = Math.hypot(sunX - centreX, sunY - centreY) / (DESIGN_WIDTH * 0.55);
+    const intensity = clamp(1 - offAxis, 0, 1) * (0.55 + this.bloomBoost * 0.45);
+    if (intensity <= 0.02) return;
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+
+    // The anamorphic streak: wide, thin, and horizontal, because that is the
+    // shape an anamorphic element puts a point source into.
+    const streak = ctx.createLinearGradient(sunX - 720, sunY, sunX + 720, sunY);
+    streak.addColorStop(0, alpha(lighting.sun, 0));
+    streak.addColorStop(0.5, alpha(lighting.sun, 0.22 * intensity));
+    streak.addColorStop(1, alpha(lighting.sun, 0));
+    ctx.fillStyle = streak;
+    ctx.fillRect(sunX - 720, sunY - 5, 1440, 10);
+
+    // A softer, taller vertical bloom around the source itself.
+    const core = ctx.createRadialGradient(sunX, sunY, 0, sunX, sunY, 210);
+    core.addColorStop(0, alpha(Palette.white, 0.2 * intensity));
+    core.addColorStop(0.35, alpha(lighting.sun, 0.12 * intensity));
+    core.addColorStop(1, alpha(lighting.sun, 0));
+    ctx.fillStyle = core;
+    ctx.beginPath();
+    ctx.arc(sunX, sunY, 210, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Ghosts: reflections between elements, so they land on the far side of
+    // centre from the source, at fractions of that distance.
+    const dx = centreX - sunX;
+    const dy = centreY - sunY;
+    for (const ghost of FLARE_GHOSTS) {
+      const x = sunX + dx * ghost.at;
+      const y = sunY + dy * ghost.at;
+      const gradient = ctx.createRadialGradient(x, y, 0, x, y, ghost.radius);
+      gradient.addColorStop(0, alpha(ghost.color, ghost.alpha * intensity));
+      gradient.addColorStop(0.7, alpha(ghost.color, ghost.alpha * intensity * 0.3));
+      gradient.addColorStop(1, alpha(ghost.color, 0));
+      ctx.fillStyle = gradient;
+      ctx.beginPath();
+      ctx.arc(x, y, ghost.radius, 0, Math.PI * 2);
       ctx.fill();
     }
 

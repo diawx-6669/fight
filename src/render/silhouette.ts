@@ -72,10 +72,17 @@ export interface SilhouetteOptions {
   glow?: number;
   /** Set true to render the fighter as a flat shadow (used for the intro). */
   flat?: boolean;
+  /** Colour of the flat fill. Defaults to black. */
+  flatColor?: string;
   /** Extra outline colour override, for hit flashes. */
   overrideRim?: string;
   /** `0` draws nothing, `1` draws fully. Used for spawn and defeat fades. */
   opacity?: number;
+  /**
+   * Whether to draw the contact shadow. Off for the copies that make up a
+   * motion smear: one body casts one shadow, however many times it is drawn.
+   */
+  shadow?: boolean;
 }
 
 export class SilhouetteRenderer {
@@ -110,7 +117,7 @@ export class SilhouetteRenderer {
     const width = (metres: number) => metres * scale * ppm;
 
     // --- floor contact shadow ----------------------------------------------
-    this.drawGroundShadow(ctx, fighter, camera, opacity);
+    if (options.shadow !== false) this.drawGroundShadow(ctx, fighter, camera, opacity);
 
     // --- build the silhouette ----------------------------------------------
     // Far-side limbs are a separate path drawn *behind* and darker, which is
@@ -171,7 +178,8 @@ export class SilhouetteRenderer {
     }
 
     // --- far limbs ----------------------------------------------------------
-    const farColor = options.flat ? '#000000' : mix(visuals.bodyOuter, Palette.ink900, 0.45);
+    const flatColor = options.flatColor ?? '#000000';
+    const farColor = options.flat ? flatColor : mix(visuals.bodyOuter, Palette.ink900, 0.45);
     const rimColor = options.overrideRim ?? visuals.rim;
     const rimWidth = clamp(ppm * scale * 0.03, 2, 7);
 
@@ -184,7 +192,7 @@ export class SilhouetteRenderer {
 
     // --- body ---------------------------------------------------------------
     if (options.flat) {
-      ctx.fillStyle = '#000000';
+      ctx.fillStyle = flatColor;
       ctx.fill(body, 'nonzero');
       ctx.restore();
       return;

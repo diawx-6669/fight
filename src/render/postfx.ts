@@ -33,6 +33,20 @@ export interface PostFxState {
   damageWash: number;
   /** Cinematic bars, `0` = none, `1` = full 2.39:1 crop. */
   letterbox: number;
+  /**
+   * Colour grade, taken from the arena.
+   *
+   * This is the step that makes two scenes built from the same shapes feel
+   * like different places. A grade is not a tint over the whole frame — that
+   * just makes everything muddy — it is a *split*: the shadows pulled one way
+   * and the highlights the other. `soft-light` with the arena's key colour
+   * does exactly that in one fill, because it leaves mid-greys alone and bends
+   * the two ends apart.
+   */
+  gradeColor: string;
+  gradeStrength: number;
+  /** Arena exposure. Above `1` lifts the whole frame, below it pulls down. */
+  exposure: number;
 }
 
 export function createPostFxState(): PostFxState {
@@ -44,6 +58,9 @@ export function createPostFxState(): PostFxState {
     desaturation: 0,
     damageWash: 0,
     letterbox: 0,
+    gradeColor: '#ffffff',
+    gradeStrength: 0,
+    exposure: 1,
   };
 }
 
@@ -152,6 +169,38 @@ export class PostProcessor {
 
   /** Vignette and colour grade, drawn in design space. */
   applyGrade(ctx: CanvasRenderingContext2D, state: PostFxState): void {
+    // Grade before the vignette: the vignette is a property of the lens and
+    // goes over a graded image, not under one.
+    if (state.gradeStrength > 0.01) {
+      ctx.save();
+      ctx.globalCompositeOperation = 'soft-light';
+      ctx.globalAlpha = clamp(state.gradeStrength, 0, 1);
+      ctx.fillStyle = state.gradeColor;
+      ctx.fillRect(0, 0, DESIGN_WIDTH, DESIGN_HEIGHT);
+      ctx.restore();
+    }
+
+    // Exposure. Lifting uses `lighter` on a grey, which adds the same amount
+    // everywhere; pulling down uses `multiply`, which takes a proportion. That
+    // asymmetry is deliberate — it matches how over- and under-exposure
+    // actually behave, and keeps a dark arena from going flat grey.
+    const exposure = clamp(state.exposure, 0.5, 1.6);
+    if (Math.abs(exposure - 1) > 0.01) {
+      ctx.save();
+      if (exposure > 1) {
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.globalAlpha = clamp((exposure - 1) * 0.5, 0, 0.3);
+        ctx.fillStyle = '#ffffff';
+      } else {
+        ctx.globalCompositeOperation = 'multiply';
+        ctx.globalAlpha = 1;
+        const level = Math.round(255 * exposure);
+        ctx.fillStyle = `rgb(${level}, ${level}, ${level})`;
+      }
+      ctx.fillRect(0, 0, DESIGN_WIDTH, DESIGN_HEIGHT);
+      ctx.restore();
+    }
+
     if (state.vignette > 0.02) {
       const gradient = ctx.createRadialGradient(
         DESIGN_WIDTH / 2,
