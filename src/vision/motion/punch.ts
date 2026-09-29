@@ -47,6 +47,8 @@ interface ArmTracker {
   startExtension: number;
   phaseElapsed: number;
   cooldown: number;
+  /** Сколько секунд модель подряд не видит эту руку. */
+  hiddenFor: number;
   /** Short history of radial speed, to confirm a peak rather than a blip. */
   speedHistory: NumericRing;
 }
@@ -64,12 +66,52 @@ function createArm(side: 'left' | 'right'): ArmTracker {
     startExtension: 0,
     phaseElapsed: 0,
     cooldown: 0,
+    hiddenFor: 0,
     speedHistory: new NumericRing(6),
   };
 }
 
-/** Radial speed, in body-units per second, that starts an extension. */
+/**
+ * Radial speed, in body-units per second, that starts an extension.
+ *
+ * Tuned against a player standing far enough back for their whole body to be
+ * in frame — and that qualifier turned out to matter enormously, because a
+ * body unit is the player's torso and the torso is *measured differently*
+ * depending on framing. With hips in shot it comes from hip to shoulder; with
+ * only the upper body visible it is estimated from shoulder width, and comes
+ * out nearly twice as large. Every distance is divided by it, so the same
+ * physical punch produces roughly half the body-space speed when the player
+ * sits close to a laptop.
+ *
+ * The result was a game that worked in testing and recognised nothing at all
+ * for anyone playing at a desk — the most common way this game is played. The
+ * constant below is therefore a *reference*, rescaled per player by
+ * `launchSpeedFor` against what their own calibration measured.
+ */
 const LAUNCH_SPEED = 2.6;
+
+/** Reach the reference threshold above was tuned against, in body units. */
+const REFERENCE_REACH = 1.55;
+
+/**
+ * The launch threshold in this player's units.
+ *
+ * `reachForward` is the furthest their wrist got from their shoulder during
+ * calibration, measured in the same body units the detector sees at play time.
+ * Dividing by the reference turns a constant that assumed one framing into one
+ * that follows the player: sit closer, and both the measured reach and the
+ * threshold shrink together.
+ *
+ * Clamped because calibration can go wrong — a player who never extended their
+ * arm during the reach stage would otherwise end up with a threshold so low
+ * that scratching their nose throws a jab.
+ */
+function launchSpeedFor(reachForward: number): number {
+  const ratio = Number.isFinite(reachForward) && reachForward > 0
+    ? reachForward / REFERENCE_REACH
+    : 1;
+  return LAUNCH_SPEED * clamp(ratio, 0.45, 1.35);
+}
 
 /** Below this the extension is treated as finished. */
 const SETTLE_SPEED = 0.7;
@@ -83,6 +125,13 @@ const ARM_COOLDOWN = 0.22;
 /** How far the wrist must actually travel, as a fraction of calibrated reach. */
 const MIN_TRAVEL_RATIO = 0.3;
 
+/**
+ * How far from the centre line a wrist is "tucked into a guard" and how far it
+ * has "left" one, in body units. Between them the guard penalty fades out.
+ */
+const TUCK_IN = 0.35;
+const TUCK_OUT = 0.95;
+
 export class PunchDetector implements MotionDetector {
   readonly name = 'punch';
 
@@ -90,6 +139,12 @@ export class PunchDetector implements MotionDetector {
 
   /** Populated so the renderer can draw a trail on the arm that is mid-punch. */
   readonly activeArms = { left: 0, right: 0 };
+
+  /** Работает ли вторая рука — чтобы отличить «рука пропала» от «руки опущены». */
+  private otherArmActive(side: 'left' | 'right'): boolean {
+    const other = this.arms.find((a) => a.side !== side);
+    return !!other && (other.phase !== 'idle' || Math.abs(other.radialSpeed) > 0.8);
+  }
 
   update(context: MotionContext, state: MotionState): ActionEvent | null {
     const { skeleton } = context;
@@ -130,11 +185,25 @@ export class PunchDetector implements MotionDetector {
     // occluded wrist snapping back into view reads as an enormous velocity.
     const visibility = Math.min(shoulder.visibility, wrist.visibility, elbow.visibility);
     if (visibility < 0.5) {
+      // Молчать здесь — худший из вариантов: человек бьёт изо всех сил рукой,
+      // которой модель просто не видит, и не получает ни удара, ни объяснения.
+      //
+      // Но и жаловаться на каждый кадр нельзя: опущенная вдоль тела рука часто
+      // не видна, и это никому не мешает. Поэтому говорим о двух вещах —
+      // о руке, потерянной прямо посреди удара, и о руке, которой нет уже
+      // долго, пока вторая работает. И то и другое человек хочет знать.
+      arm.hiddenFor += dt;
+      const lostMidPunch = arm.phase === 'extending';
+      const lostForLong = arm.hiddenFor > 1 && this.otherArmActive(arm.side);
+      if (lostMidPunch || lostForLong) {
+        context.mistakes.note('armHidden', arm.side, visibility / 0.5, context.now);
+      }
       arm.phase = 'idle';
       arm.speedHistory.clear();
       this.activeArms[arm.side] = 0;
       return null;
     }
+    arm.hiddenFor = 0;
 
     arm.previousReach = arm.reach;
     arm.reach = distance(shoulder.x, shoulder.y, wrist.x, wrist.y);
@@ -144,22 +213,62 @@ export class PunchDetector implements MotionDetector {
     const extension = skeleton.armExtension(arm.side);
     // Thresholds scale with sensitivity and with how far the player is standing:
     // a distant player produces smaller body-space velocities.
-    const launchThreshold = (LAUNCH_SPEED / sensitivity) * (1 + calibration.noiseFloor * 3);
+    const launchThreshold =
+      (launchSpeedFor(calibration.reachForward) / sensitivity) * (1 + calibration.noiseFloor * 3);
 
     switch (arm.phase) {
       case 'idle': {
-        if (arm.cooldown > 0) break;
-        // Guarding is a held pose, not a punch; a player adjusting their guard
-        // must not be charged for it.
-        if (state.guarding && arm.radialSpeed < launchThreshold * 1.4) break;
+        if (arm.cooldown > 0) {
+          if (arm.radialSpeed > launchThreshold) {
+            context.mistakes.note(
+              'punchTooSoon', arm.side,
+              1 - arm.cooldown / (ARM_COOLDOWN / Math.max(sensitivity, 0.5)), context.now,
+            );
+          }
+          break;
+        }
+        // Guarding is a held pose, not a punch, so the bar goes up while the
+        // hands are at the face — otherwise settling into a stance throws
+        // jabs. But a flat penalty for guarding is much worse than it looks:
+        // hands up at the face *is* the fighting stance this game teaches, so
+        // a player standing correctly pays it on every single punch, and pays
+        // it silently. That is a plausible shape for "the game doesn't see me".
+        //
+        // What actually separates the two is where the hand goes. A guard
+        // adjustment stays tucked towards the centre line; a punch leaves. So
+        // the penalty fades as the hand does: full while tucked in at the
+        // face, gone by the time the wrist has committed outward.
+        //
+        // Expressed as one number rather than an early return, because the
+        // near-miss below has to measure against whichever bar is actually in
+        // force — otherwise a soft punch from a guard is rejected by one
+        // threshold and explained against another.
+        const tucked = state.guarding
+          ? remapClamped(Math.abs(wrist.x), TUCK_OUT, TUCK_IN, 0, 1)
+          : 0;
+        const bar = launchThreshold * (1 + tucked * 0.4);
 
-        if (arm.radialSpeed > launchThreshold) {
+        if (arm.radialSpeed > bar) {
           arm.phase = 'extending';
           arm.phaseElapsed = 0;
           arm.peakSpeed = arm.radialSpeed;
           arm.startX = wrist.x;
           arm.startY = wrist.y;
           arm.startExtension = extension;
+          break;
+        }
+
+        // Движение было, но не дотянуло до порога. Это самая частая причина
+        // жалобы «игра меня не видит»: человек бьёт плавно, а детектор ждёт
+        // баллистического выброса — и до этой ветки не говорил об этом ничего.
+        //
+        // Нижняя граница отделяет попытку ударить от обычного движения рукой.
+        // Ставить её высоко соблазнительно — меньше ложных подсказок, — но
+        // именно слабый, вполсилы обозначенный удар остаётся без ответа чаще
+        // всего, а человек при этом уверен, что ударил. Треть порога ловит
+        // такие попытки и всё ещё пропускает мимо ушей почёсывание носа.
+        if (arm.radialSpeed > bar * 0.3) {
+          context.mistakes.note('punchTooSlow', arm.side, arm.radialSpeed / bar, context.now);
         }
         break;
       }
@@ -215,19 +324,32 @@ export class PunchDetector implements MotionDetector {
 
     // Reject twitches: the hand must actually have gone somewhere.
     const minTravel = calibration.reachForward * MIN_TRAVEL_RATIO * (1 / sensitivity);
-    if (travel < minTravel) return null;
+    if (travel < minTravel) {
+      // Нижняя граница у самой жалобы. Возврат руки к лицу проходит через
+      // точку, где расстояние до плеча снова растёт, и это иногда открывает
+      // фазу выброса на один кадр — с путём около нуля. Формально это отказ,
+      // но человек в этот момент не бил, и подсказка «ты не дотянулся, 0%»
+      // была бы неправдой о том, чего он не делал.
+      if (travel > minTravel * 0.25) {
+        context.mistakes.note('punchTooShort', arm.side, travel / minTravel, now);
+      }
+      return null;
+    }
 
     // Reject flails: a punch ends straighter than it started.
     const extensionGain = extension - arm.startExtension;
-    if (extensionGain < 0.08 && extension < 0.62) return null;
+    if (extensionGain < 0.08 && extension < 0.62) {
+      // Из двух порогов берём тот, к которому человек ближе: подсказка должна
+      // указывать на то, что он почти выполнил, а не на случайный из двух.
+      context.mistakes.note(
+        'punchNotExtended', arm.side,
+        Math.max(extensionGain / 0.08, extension / 0.62), now,
+      );
+      return null;
+    }
 
-    const power = remapClamped(
-      arm.peakSpeed,
-      LAUNCH_SPEED * 0.9,
-      LAUNCH_SPEED * 3.4,
-      0.35,
-      1,
-    );
+    const launch = launchSpeedFor(calibration.reachForward);
+    const power = remapClamped(arm.peakSpeed, launch * 0.9, launch * 3.4, 0.35, 1);
 
     const angle = Math.atan2(travelY, travelX);
     const technique = classifyPunch(arm.side, travelX, travelY, extension, wristY, shoulderY);

@@ -78,7 +78,12 @@ export class DodgeDetector implements MotionDetector {
 
     const threshold = SLIP_SPEED / sensitivity;
     const speed = Math.abs(this.leanVelocity);
-    if (speed < threshold) return null;
+    if (speed < threshold) {
+      if (speed > threshold * 0.4) {
+        context.mistakes.note('dodgeTooSmall', 'none', speed / threshold, context.now);
+      }
+      return null;
+    }
 
     const direction: -1 | 1 = this.leanVelocity > 0 ? 1 : -1;
     // A slip that reverses immediately is a wobble, not a dodge.
@@ -87,7 +92,10 @@ export class DodgeDetector implements MotionDetector {
     // The lean must be heading somewhere meaningful, not just moving fast
     // through the centre on the way back from the other side.
     const projected = lean + this.leanVelocity * 0.12;
-    if (Math.abs(projected) < MIN_LEAN) return null;
+    if (Math.abs(projected) < MIN_LEAN) {
+      context.mistakes.note('dodgeTooSmall', 'none', Math.abs(projected) / MIN_LEAN, context.now);
+      return null;
+    }
 
     this.cooldown = COOLDOWN;
     this.lastDirection = direction;

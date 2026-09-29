@@ -85,6 +85,12 @@ export class KickDetector implements MotionDetector {
     // phantom kicks every time the player shifted their weight, which is far
     // worse than the technique simply being unavailable and said so in the UI.
     if (!skeleton.legsVisible) {
+      // Говорим об этом только когда человек явно пытался ударить ногой —
+      // иначе игрок, сидящий по пояс в кадре, получал бы эту подсказку
+      // постоянно, хотя играет руками и всем доволен.
+      if (Math.abs(state.lean) > 0.35 || state.crouch > 0.3) {
+        context.mistakes.note('legsHidden', 'none', 0.5, context.now);
+      }
       this.reset();
       return null;
     }
@@ -197,11 +203,19 @@ export class KickDetector implements MotionDetector {
     const { calibration, sensitivity, now } = context;
 
     // Did the foot actually leave the ground?
-    if (leg.peakHeight < (MIN_LIFT / sensitivity) * (1 + calibration.noiseFloor * 2)) return null;
+    const needLift = (MIN_LIFT / sensitivity) * (1 + calibration.noiseFloor * 2);
+    if (leg.peakHeight < needLift) {
+      context.mistakes.note('kickTooLow', leg.side, leg.peakHeight / needLift, now);
+      return null;
+    }
 
     const travelX = ankleX - leg.startX;
     const travelY = ankleY - leg.startY;
-    if (Math.hypot(travelX, travelY) < 0.25) return null;
+    const travel = Math.hypot(travelX, travelY);
+    if (travel < 0.25) {
+      context.mistakes.note('kickTooSlow', leg.side, travel / 0.25, now);
+      return null;
+    }
 
     const power = remapClamped(leg.peakSpeed, LAUNCH_SPEED * 0.8, LAUNCH_SPEED * 3, 0.45, 1);
     const angle = Math.atan2(travelY, travelX);

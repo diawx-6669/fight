@@ -6,6 +6,7 @@ import { GestureRecognizer, type GestureState } from './gestures';
 import { HandTracker } from './handTracker';
 import { PoseTracker } from './poseTracker';
 import { MotionAnalyzer } from './motion/analyzer';
+import type { CoachHint } from './motion/coach';
 import type { ActionEvent, MotionState } from './motion/types';
 import type { Skeleton } from './skeleton';
 
@@ -109,6 +110,14 @@ export class VisionSystem {
 
   get motion(): MotionState {
     return this.analyzer.state;
+  }
+
+  /**
+   * Подсказка режима «ошибка»: что именно не засчиталось и что поправить.
+   * `null`, когда поправлять нечего.
+   */
+  get coach(): CoachHint | null {
+    return this.analyzer.mistakes.hint;
   }
 
   get gesture(): GestureState {

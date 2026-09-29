@@ -8,6 +8,7 @@ import { GuardDetector } from './guard';
 import { KickDetector } from './kick';
 import { LocomotionDetector } from './locomotion';
 import { PunchDetector } from './punch';
+import { MistakeLog } from './coach';
 import { createMotionState, type ActionEvent, type MotionContext, type MotionState } from './types';
 
 const log = createLogger('motion');
@@ -57,6 +58,14 @@ const MIN_QUALITY = 0.42;
 
 export class MotionAnalyzer {
   readonly state: MotionState = createMotionState();
+
+  /**
+   * Режим «ошибка»: почему движение не засчиталось.
+   *
+   * Живёт на анализаторе, а не внутри каждого детектора, потому что выбирать
+   * одну подсказку из нескольких можно только видя их все сразу.
+   */
+  readonly mistakes = new MistakeLog();
 
   private readonly locomotion = new LocomotionDetector();
   private readonly guard = new GuardDetector();
@@ -108,6 +117,7 @@ export class MotionAnalyzer {
       dt,
       now,
       sensitivity: this.sensitivity,
+      mistakes: this.mistakes,
     };
 
     // 1. Body posture: airborne, crouch, lean, footwork.
@@ -119,7 +129,17 @@ export class MotionAnalyzer {
     // Once quality collapses, posture is still worth reading (it degrades
     // gracefully) but discrete strikes are not.
     if (this.state.quality < MIN_QUALITY) {
+      // Раньше здесь просто выключались удары, и игрок не узнавал об этом
+      // ничего. Разделяем два случая: человека не видно вовсе и человека видно
+      // плохо — лечатся они по-разному.
+      this.mistakes.note(
+        skeleton.present ? 'lowLight' : 'outOfFrame',
+        'none',
+        this.state.quality / MIN_QUALITY,
+        now,
+      );
       this.decayActivity();
+      this.mistakes.settle(now);
       return;
     }
 
@@ -134,6 +154,8 @@ export class MotionAnalyzer {
     this.debug.armActivity.right = this.punch.activeArms.right;
     this.debug.legActivity.left = this.kick.activeLegs.left;
     this.debug.legActivity.right = this.kick.activeLegs.right;
+
+    this.mistakes.settle(now);
   }
 
   private collect(event: ActionEvent | null): void {
@@ -146,10 +168,20 @@ export class MotionAnalyzer {
 
     if (isStrike && event.timestamp - this.lastActionAt < GLOBAL_COOLDOWN_MS) {
       this.debug.suppressedCount++;
+      this.mistakes.note(
+        'punchTooSoon',
+        event.side === 'left' || event.side === 'right' ? event.side : 'none',
+        (event.timestamp - this.lastActionAt) / GLOBAL_COOLDOWN_MS,
+        event.timestamp,
+      );
       return;
     }
 
-    if (isStrike) this.lastActionAt = event.timestamp;
+    if (isStrike) {
+      this.lastActionAt = event.timestamp;
+      // Движение засчитано — держать над ним «ты не дотянулся» больше незачем.
+      this.mistakes.clear();
+    }
     this.pending.push(event);
     this.debug.lastAction = event;
     this.debug.actionCount++;
@@ -196,6 +228,7 @@ export class MotionAnalyzer {
     this.debug.lastAction = null;
     this.debug.actionCount = 0;
     this.debug.suppressedCount = 0;
+    this.mistakes.clear();
 
     const state = this.state;
     state.guarding = false;

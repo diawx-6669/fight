@@ -8,9 +8,10 @@ import { World, type GameMode } from '@/game/world';
 import type { NetClient } from '@/net/client';
 import { buildSnapshot, RemoteFighterSync } from '@/net/sync';
 import type { ActionEvent, Technique } from '@/vision/motion/types';
+import type { MistakeCode } from '@/vision/motion/coach';
 import { FightScene } from '@/render/scene';
 import { DESIGN_HEIGHT, DESIGN_WIDTH } from '@/render/renderer';
-import { alpha, font, Palette, TypeScale } from '@/render/theme';
+import { alpha, font, mix, Palette, Semantic, TypeScale } from '@/render/theme';
 import { Screen, type ScreenContext, type ScreenParams } from '../screen';
 import { chamferedRect } from '../widgets';
 
@@ -31,6 +32,23 @@ import { chamferedRect } from '../widgets';
  * consumed by the next tick rather than applied immediately, so a punch
  * detected between two ticks lands on a tick boundary like every other input.
  */
+
+/** Короткие имена ошибок для панели тренировки — полные подсказки длиннее. */
+const MISTAKE_SHORT: Partial<Record<MistakeCode, string>> = {
+  outOfFrame: 'не видно тебя',
+  lowLight: 'мало света',
+  armHidden: 'не видно руку',
+  legsHidden: 'не видно ног',
+  punchTooSlow: 'удар плавный',
+  punchTooShort: 'не дотянулся',
+  punchNotExtended: 'рука согнута',
+  punchTooSoon: 'слишком часто',
+  kickTooLow: 'нога низко',
+  kickTooSlow: 'кик медленный',
+  jumpTooLow: 'прыжок низкий',
+  crouchTooShallow: 'присед мелкий',
+  dodgeTooSmall: 'уклон слабый',
+};
 
 export class FightScreen extends Screen {
   readonly id = 'fight' as const;
@@ -532,7 +550,12 @@ export class FightScreen extends Screen {
     if (blank) this.drawBlankSceneNotice(ctx, blank);
 
     if (this.mode === 'survival') this.drawSurvivalStreak(ctx);
-    if (!this.context.vision.status.present) this.drawTrackingWarning(ctx);
+
+    // Подсказка вместо предупреждения, а не вместе с ним. Когда человека не
+    // видно, режим «ошибка» говорит то же самое, только конкретнее, и две
+    // панели об одном налезали друг на друга внизу экрана.
+    const coached = this.drawCoachHint(ctx);
+    if (!coached && !this.context.vision.status.present) this.drawTrackingWarning(ctx);
     if (this.mode === 'training') this.drawTrainingOverlay(ctx);
     if (this.context.settings.debugOverlay) this.drawDebug(ctx);
   }
@@ -573,6 +596,79 @@ export class FightScreen extends Screen {
     font(ctx, 17, 'ui', 400);
     ctx.fillText('Нажми ESC и зайди в бой заново', DESIGN_WIDTH / 2, y + 138);
     ctx.restore();
+  }
+
+  /**
+   * Режим «ошибка»: что именно не засчиталось и что с этим делать.
+   *
+   * Самая важная панель в игре, хотя выглядит скромнее всех. Без неё
+   * непризнанное движение неотличимо от сломанной игры: человек бьёт, ничего
+   * не происходит, и единственное доступное ему объяснение — «не работает».
+   * Он не может знать, промахнулся ли он на сантиметр или стоит не в том
+   * конце комнаты, а значит не может ничего исправить.
+   *
+   * Поэтому здесь ровно три вещи и ни одной лишней: что не так, что сделать,
+   * и насколько близко было. Полоска близости несёт больше всего смысла —
+   * «дотянул 85%» и «дотянул 20%» требуют разных поправок, и одно слово
+   * «мимо» их не различает.
+   *
+   * Живёт внизу по центру, под бойцами и над кромкой кадра: достаточно на
+   * виду, чтобы прочитать боковым зрением, и достаточно в стороне, чтобы не
+   * закрывать то, ради чего человек сюда пришёл.
+   */
+  private drawCoachHint(ctx: CanvasRenderingContext2D): boolean {
+    const hint = this.context.vision.coach;
+    if (!hint) return false;
+
+    // Подсказка не выскакивает: за 180 мс она проявляется и так же уходит.
+    // Мигающий текст в бою читается как ошибка игры, а не как совет.
+    const age = (performance.now() - hint.timestamp) / 1000;
+    const fade = clamp(Math.min(age / 0.18, (2.2 - age) / 0.3), 0, 1);
+    if (fade <= 0.01) return false;
+
+    const width = 660;
+    const height = 118;
+    const x = (DESIGN_WIDTH - width) / 2;
+    const y = DESIGN_HEIGHT - 232;
+
+    ctx.save();
+    ctx.globalAlpha = fade;
+
+    ctx.fillStyle = 'rgba(10, 6, 12, 0.88)';
+    chamferedRect(ctx, x, y, width, height, 14);
+    ctx.fill();
+    ctx.strokeStyle = alpha(Palette.gold, 0.55);
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // Полоса слева — она же индикатор близости. Цвет от «совсем не то» к
+    // «ещё чуть-чуть», чтобы состояние читалось раньше, чем прочитан текст.
+    const near = clamp(hint.progress, 0, 1);
+    const bar = mix(Palette.rose, Semantic.health, near);
+    ctx.fillStyle = bar;
+    ctx.fillRect(x, y + height * (1 - near), 4, height * near);
+    ctx.fillStyle = alpha(bar, 0.22);
+    ctx.fillRect(x, y, 4, height);
+
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+
+    ctx.fillStyle = Palette.gold;
+    font(ctx, 26, 'display', 700);
+    ctx.fillText(hint.title.toUpperCase(), x + 26, y + 44);
+
+    ctx.fillStyle = Palette.paper;
+    font(ctx, 18, 'ui', 500);
+    ctx.fillText(hint.fix, x + 26, y + 76);
+
+    // Число рядом со словами: без него «почти» и «совсем мимо» выглядят
+    // одинаково, а поправка нужна разная.
+    ctx.fillStyle = alpha(Palette.ash500, 0.9);
+    font(ctx, 15, 'ui', 500);
+    ctx.fillText(`получилось на ${Math.round(near * 100)}%`, x + 26, y + 101);
+
+    ctx.restore();
+    return true;
   }
 
   /**
@@ -728,8 +824,26 @@ export class FightScreen extends Screen {
     ctx.fillText(
       `распознано ${analyzer.debug.actionCount} · отброшено ${analyzer.debug.suppressedCount}`,
       x + 24,
-      y + height - 34,
+      y + height - 58,
     );
+
+    // Топ причин, по которым движения не засчитывались.
+    //
+    // «Распознано 0» — это факт без объяснения, и человеку с ним нечего
+    // делать. А «не дотянулся ×47» — уже диагноз: порог стоит не там, или
+    // стоять надо иначе. Один этот список отличает «игра сломана» от
+    // «я делаю не то, и вот что именно».
+    const top = [...analyzer.mistakes.tally.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 2);
+    if (top.length > 0) {
+      ctx.fillStyle = alpha(Palette.gold, 0.85);
+      ctx.fillText(
+        top.map(([code, count]) => `${MISTAKE_SHORT[code] ?? code} ×${count}`).join(' · '),
+        x + 24,
+        y + height - 34,
+      );
+    }
 
     ctx.restore();
   }

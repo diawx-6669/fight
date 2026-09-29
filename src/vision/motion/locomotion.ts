@@ -98,6 +98,18 @@ export class LocomotionDetector implements MotionDetector {
     state.airborne = airborne;
     state.crouch = airborne ? 0 : clamp(crouchRaw, 0, 1);
 
+    // Попытка, не дошедшая до порога. Гистерезисная защёлка открывается около
+    // единицы, поэтому «больше половины, но не сработало» — это ровно тот
+    // случай, когда человек присел или подпрыгнул, а игра промолчала.
+    const riseSignal = rise * sensitivity;
+    if (!airborne && riseSignal > 0.45 && this.hipVelocity > 0) {
+      context.mistakes.note('jumpTooLow', 'none', riseSignal, context.now);
+    }
+    const crouchSignal = crouchRaw * sensitivity;
+    if (!crouching && crouchSignal > 0.45) {
+      context.mistakes.note('crouchTooShallow', 'none', crouchSignal, context.now);
+    }
+
     let event: ActionEvent | null = null;
 
     if (airborne) {

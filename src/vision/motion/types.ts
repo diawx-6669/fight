@@ -1,5 +1,6 @@
 import type { CalibrationProfile } from '../calibration';
 import type { Skeleton } from '../skeleton';
+import type { MistakeLog } from './coach';
 
 /**
  * The contract between "what the camera saw" and "what the fighter does".
@@ -96,6 +97,13 @@ export function createMotionState(): MotionState {
 /** What every detector receives on each vision frame. */
 export interface MotionContext {
   readonly skeleton: Skeleton;
+  /**
+   * Куда детектор пишет, почему он *не* сработал.
+   *
+   * Передаётся всем, потому что иначе каждый отказ пришлось бы возвращать
+   * наружу отдельным каналом, а отказов у одного только удара семь штук.
+   */
+  readonly mistakes: MistakeLog;
   readonly calibration: CalibrationProfile;
   /** Seconds since the previous vision frame. */
   readonly dt: number;

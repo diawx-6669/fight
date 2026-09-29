@@ -40,6 +40,12 @@ export interface PoseTrackerStats {
   lostStreak: number;
 }
 
+/**
+ * Доля кадра, которую модели разрешено занимать: интервал между прогонами не
+ * меньше стоимости прогона, умноженной на это число.
+ */
+const INFERENCE_HEADROOM = 2.2;
+
 export class PoseTracker {
   private landmarker: PoseLandmarkerInstance | null = null;
   private readonly filters: Vector3Filter[] = [];
@@ -48,7 +54,10 @@ export class PoseTracker {
   private clock = 0;
   private lastDetectAt = 0;
   private lastFrameTime = 0;
-  private intervalMs: number;
+  private requestedIntervalMs: number;
+
+  /** Сглаженная стоимость одного прогона модели, миллисекунды. */
+  private smoothedInferenceMs = 0;
 
   readonly skeleton = new Skeleton();
   readonly stats: PoseTrackerStats = { hz: 0, inferenceMs: 0, missedFrames: 0, lostStreak: 0 };
@@ -64,7 +73,7 @@ export class PoseTracker {
   constructor(options: PoseTrackerOptions = {}) {
     this.model = options.model ?? 'poseLite';
     this.mirrored = options.mirrored ?? true;
-    this.intervalMs = 1000 / (options.hz ?? 30);
+    this.requestedIntervalMs = 1000 / (options.hz ?? 30);
     this.onProgress = options.onProgress;
 
     // Hands move fastest and need to stay crisp; hips barely move and benefit
@@ -79,7 +88,26 @@ export class PoseTracker {
   }
 
   setRate(hz: number): void {
-    this.intervalMs = 1000 / Math.max(5, hz);
+    this.requestedIntervalMs = 1000 / Math.max(5, hz);
+  }
+
+  /**
+   * Как часто на самом деле можно звать модель.
+   *
+   * Запрошенная частота — это пожелание, а не факт. Инференс идёт в том же
+   * потоке, что и отрисовка, и если один прогон стоит 60 мс, то просьба
+   * повторять его каждые 22 мс не даёт 45 Гц — она даёт игру, которая стоит
+   * в инференсе почти всё время и дёргается. Ровно так это и выглядит со
+   * стороны: «иногда вообще лагает».
+   *
+   * Поэтому нижняя граница интервала следует за измеренной стоимостью:
+   * модель получает примерно 45% кадра, остальное остаётся игре. На быстрой
+   * машине множитель ни на что не влияет, на медленной — сам опускает частоту
+   * распознавания до той, которую машина тянет, вместо того чтобы просаживать
+   * всё подряд.
+   */
+  private get intervalMs(): number {
+    return Math.max(this.requestedIntervalMs, this.smoothedInferenceMs * INFERENCE_HEADROOM);
   }
 
   /** Loads the model. Safe to call repeatedly; the work happens once. */
@@ -126,7 +154,14 @@ export class PoseTracker {
       log.onceWarn('detect-failed', 'pose inference failed', error);
       return false;
     }
-    this.stats.inferenceMs = performance.now() - start;
+    const cost = performance.now() - start;
+    this.stats.inferenceMs = cost;
+    // Экспоненциальное сглаживание: один залипший кадр не должен обрушивать
+    // частоту распознавания на следующую секунду, а устойчивое подорожание —
+    // должно.
+    this.smoothedInferenceMs = this.smoothedInferenceMs === 0
+      ? cost
+      : this.smoothedInferenceMs * 0.85 + cost * 0.15;
 
     const instantHz = dt > 0 ? 1 / dt : 0;
     this.stats.hz += (instantHz - this.stats.hz) * 0.1;
