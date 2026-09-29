@@ -49,3 +49,9 @@ lerna-debug.log*
 # downloaded ML models (fetched at runtime / by script)
 public/models/*.task
 public/models/*.tflite
+
+# MediaPipe WASM runtime, copied out of node_modules by `npm run sync:runtime`
+public/wasm/
+
+# local reproduction scripts
+.repro-*.mjs

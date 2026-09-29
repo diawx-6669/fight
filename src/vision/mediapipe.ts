@@ -10,13 +10,18 @@ const log = createLogger('vision');
  * fetched on demand — the first time the player actually starts a fight or
  * opens gesture control — and cached for the rest of the session.
  *
- * Model assets can come from three places, tried in order:
+ * Both the runtime and the models are looked for next to the app first, and
+ * only then on a public CDN:
  *   1. `?models=<url>` on the page, for testing a mirror.
- *   2. `/models/` next to the app, if the project ran `npm run fetch:models`.
- *   3. Google's public model CDN.
+ *   2. `wasm/` and `models/` beside `index.html`, put there at build time by
+ *      `npm run sync:runtime` and `npm run fetch:models`.
+ *   3. jsDelivr and Google's model CDN.
  *
- * The local option matters because plenty of networks block the Google CDN,
- * and a fighting game that refuses to start is not much of a fighting game.
+ * The order matters more than it looks. When those CDNs are unreachable — and
+ * they are blocked on a great many networks — the camera still opens and the
+ * preview still shows the player, so the game looks like it is working while
+ * recognising precisely nothing. Serving both from our own origin removes the
+ * single most common reason for this game to appear broken.
  */
 
 export const WASM_CDN = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/wasm';
@@ -40,25 +45,55 @@ function modelBase(): string {
   return MODEL_CDN;
 }
 
-const localBase = new URL('models/', document.baseURI).href;
+const localModelBase = new URL('models/', document.baseURI).href;
+const localWasmBase = new URL('wasm/', document.baseURI).href;
 
 /**
- * Resolves a model URL, preferring a locally hosted copy when one exists.
- * A `HEAD` that fails for any reason simply falls through to the CDN.
+ * Asks whether a file really is served from our own origin.
+ *
+ * A bare `response.ok` is not enough to answer that. A dev server answers any
+ * unknown path with `index.html` and a cheerful 200, so a missing model would
+ * be "found", then handed to the loader, which would try to parse a web page
+ * as a neural network and fail with something unreadable. Checking that the
+ * answer is not HTML costs nothing and turns that into a clean fallback.
  */
+async function servedLocally(url: string): Promise<boolean> {
+  try {
+    const response = await fetch(url, { method: 'HEAD', cache: 'force-cache' });
+    if (!response.ok) return false;
+    const type = response.headers.get('content-type') ?? '';
+    return !type.includes('text/html');
+  } catch {
+    // Absent, or blocked — either way, use the CDN.
+    return false;
+  }
+}
+
+/** Resolves a model URL, preferring a locally hosted copy when one exists. */
 async function resolveModelUrl(key: ModelKey): Promise<string> {
   const filename = MODEL_PATHS[key].split('/').pop()!;
-  const local = `${localBase}${filename}`;
-  try {
-    const response = await fetch(local, { method: 'HEAD', cache: 'force-cache' });
-    if (response.ok) {
-      log.info(`using local model for ${key}`);
-      return local;
-    }
-  } catch {
-    // Local copy absent — expected in the default checkout.
+  const local = `${localModelBase}${filename}`;
+  if (await servedLocally(local)) {
+    log.info(`using local model for ${key}`);
+    return local;
   }
+  log.warn(`no local copy of ${key}; falling back to the model CDN`);
   return `${modelBase()}/${MODEL_PATHS[key]}`;
+}
+
+/**
+ * Resolves the directory the WASM runtime is loaded from.
+ *
+ * Probing one file is enough: the three variants ship together or not at all.
+ */
+async function resolveWasmBase(): Promise<string> {
+  if (await servedLocally(`${localWasmBase}vision_wasm_internal.js`)) {
+    log.info('using local wasm runtime');
+    // MediaPipe appends its own filenames, and dislikes a trailing slash.
+    return localWasmBase.replace(/\/$/, '');
+  }
+  log.warn('no local wasm runtime; falling back to the CDN');
+  return WASM_CDN;
 }
 
 type TasksVision = typeof import('@mediapipe/tasks-vision');
@@ -81,8 +116,9 @@ export async function loadFileset(): Promise<FilesetResolverType> {
   if (!filesetPromise) {
     filesetPromise = (async () => {
       const { FilesetResolver } = await loadTasksVision();
-      log.info('resolving vision wasm fileset');
-      return FilesetResolver.forVisionTasks(WASM_CDN);
+      const base = await resolveWasmBase();
+      log.info(`resolving vision wasm fileset from ${base}`);
+      return FilesetResolver.forVisionTasks(base);
     })();
   }
   return filesetPromise;

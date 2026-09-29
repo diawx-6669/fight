@@ -9,8 +9,8 @@
     "node": ">=20"
   },
   "scripts": {
-    "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "dev": "npm run sync:runtime && vite",
+    "build": "npm run sync:runtime && tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm run check:skeleton && npm run check:retarget",
@@ -21,7 +21,9 @@
     "start": "concurrently -n web,net -c cyan,magenta \"npm:dev\" \"npm:server\"",
     "fetch:models": "node scripts/fetch-models.mjs",
     "smoke": "node scripts/smoke.mjs",
-    "net:check": "node scripts/net-check.mjs"
+    "net:check": "node scripts/net-check.mjs",
+    "sync:runtime": "node scripts/sync-runtime.mjs",
+    "assets": "npm run sync:runtime && npm run fetch:models"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^0.10.22"
