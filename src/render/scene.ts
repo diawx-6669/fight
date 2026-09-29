@@ -1,4 +1,4 @@
-import { clamp, damp } from '@/core/math';
+import { clamp, damp, wrapIndex } from '@/core/math';
 import type { QualitySettings } from '@/core/device';
 import { CRITICAL_HEALTH_RATIO } from '@/game/constants';
 import type { Fighter } from '@/game/fighter';
@@ -53,6 +53,38 @@ const MOTION_BLUR_REACH = 0.85;
  * frame. The uneven spacing and the mixed sizes are the point: evenly spaced
  * identical circles read as a pattern, not as glass.
  */
+/**
+ * Airborne dust, laid out once from a fixed table rather than a random
+ * generator, so every player sees the same sky and a reload never reshuffles
+ * it. Depth drives both the parallax and the size, which is the whole trick:
+ * the near, large, fast specks and the far, small, slow ones together read as
+ * a volume of air instead of a layer of dots.
+ */
+const MOTE_SEEDS = [
+  { x: 0.06, y: 0.18, radius: 2.6, depth: 1, phase: 0.2 },
+  { x: 0.13, y: 0.62, radius: 1.4, depth: 0.5, phase: 2.9 },
+  { x: 0.19, y: 0.34, radius: 3.4, depth: 1.3, phase: 1.1 },
+  { x: 0.24, y: 0.79, radius: 1.1, depth: 0.35, phase: 4.4 },
+  { x: 0.31, y: 0.12, radius: 1.9, depth: 0.7, phase: 3.3 },
+  { x: 0.37, y: 0.48, radius: 2.9, depth: 1.15, phase: 0.8 },
+  { x: 0.43, y: 0.7, radius: 1.3, depth: 0.45, phase: 5.2 },
+  { x: 0.48, y: 0.26, radius: 2.1, depth: 0.85, phase: 2.1 },
+  { x: 0.54, y: 0.58, radius: 3.1, depth: 1.25, phase: 1.7 },
+  { x: 0.6, y: 0.15, radius: 1.2, depth: 0.4, phase: 4.9 },
+  { x: 0.65, y: 0.83, radius: 2.4, depth: 0.95, phase: 0.5 },
+  { x: 0.71, y: 0.4, radius: 1.6, depth: 0.6, phase: 3.8 },
+  { x: 0.76, y: 0.67, radius: 3.6, depth: 1.4, phase: 2.4 },
+  { x: 0.82, y: 0.22, radius: 1.5, depth: 0.55, phase: 5.7 },
+  { x: 0.87, y: 0.52, radius: 2.2, depth: 0.9, phase: 1.4 },
+  { x: 0.93, y: 0.75, radius: 1.8, depth: 0.65, phase: 4.1 },
+  { x: 0.97, y: 0.3, radius: 2.7, depth: 1.05, phase: 0.9 },
+  { x: 0.09, y: 0.44, radius: 1.7, depth: 0.62, phase: 3.1 },
+  { x: 0.28, y: 0.6, radius: 2.5, depth: 1, phase: 5.5 },
+  { x: 0.5, y: 0.88, radius: 1.4, depth: 0.48, phase: 2.7 },
+  { x: 0.68, y: 0.09, radius: 3.2, depth: 1.3, phase: 1.9 },
+  { x: 0.89, y: 0.91, radius: 1.3, depth: 0.42, phase: 4.6 },
+] as const;
+
 const FLARE_GHOSTS = [
   { at: 0.42, radius: 26, alpha: 0.2, color: '#ffd9a8' },
   { at: 0.78, radius: 58, alpha: 0.1, color: '#8fd4ff' },
@@ -101,6 +133,23 @@ export class FightScene {
 
   /** Clock for the drifting light shafts. */
   private shaftTime = 0;
+
+  /**
+   * Dust hanging in the air.
+   *
+   * Seeded once and then only read: the motes never move in world space, they
+   * are displaced by the camera. That is not a shortcut — dust near the lens
+   * genuinely does slide across the frame as the camera pans, far more than
+   * anything in the scene does, and it is the parallax rather than the specks
+   * themselves that tells the eye there is air here.
+   */
+  private readonly motes = MOTE_SEEDS.map((seed) => ({
+    x: seed.x * DESIGN_WIDTH,
+    y: seed.y * DESIGN_HEIGHT,
+    radius: seed.radius,
+    depth: seed.depth,
+    phase: seed.phase,
+  }));
 
   /**
    * Half-resolution canvas the background is drawn into.
@@ -399,6 +448,7 @@ export class FightScene {
 
     this.drawBackdrop(ctx);
     this.drawLightShafts(ctx);
+    this.drawMotes(ctx);
 
     // Weather splits around the fighters: the far half sits behind them so the
     // silhouettes never get lost in the middle of a snowstorm.
@@ -630,6 +680,50 @@ export class FightScene {
       });
       ctx.restore();
     }
+  }
+
+  /**
+   * Dust hanging in the air, lit by the arena's key light.
+   *
+   * The cheapest thing in this file and one of the most effective. A scene
+   * with nothing between the camera and the fighters reads as a painting; a
+   * dozen specks drifting at different speeds reads as a room. They brighten
+   * as they approach the light, which is the part that makes them look lit
+   * rather than drawn.
+   */
+  private drawMotes(ctx: CanvasRenderingContext2D): void {
+    const world = this.world;
+    if (!world || !this.quality.bloom) return;
+
+    const lighting = world.arena.lighting;
+    const sunX = lighting.sunX * DESIGN_WIDTH;
+    const sunY = lighting.sunY * DESIGN_HEIGHT;
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = lighting.sun;
+
+    for (const mote of this.motes) {
+      // Camera parallax, wrapped so the field never runs out at the edges.
+      const driftX = -this.camera.x * mote.depth * 46 + Math.sin(this.shaftTime * 0.11 + mote.phase) * 26 * mote.depth;
+      const driftY = (this.camera.y - 1.1) * mote.depth * 30 + Math.sin(this.shaftTime * 0.17 + mote.phase * 1.7) * 14;
+
+      const x = wrapIndex(mote.x + driftX, DESIGN_WIDTH);
+      const y = wrapIndex(mote.y + driftY, DESIGN_HEIGHT);
+
+      // Closer to the light, brighter — and a slow twinkle so the field is
+      // never quite still even when the camera is.
+      const toLight = Math.hypot(x - sunX, y - sunY) / DESIGN_WIDTH;
+      const lit = clamp(1 - toLight * 1.35, 0.08, 1);
+      const twinkle = 0.65 + Math.sin(this.shaftTime * 0.9 + mote.phase * 3) * 0.35;
+
+      ctx.globalAlpha = clamp(lit * twinkle * 0.34, 0, 0.4);
+      ctx.beginPath();
+      ctx.arc(x, y, mote.radius * (0.6 + mote.depth * 0.5), 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.restore();
   }
 
   /**
