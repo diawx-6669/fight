@@ -1,7 +1,7 @@
 import { clamp } from '@/core/math';
 import type { QualityTier } from '@/core/device';
 import { getDeviceProfile } from '@/core/device';
-import { loadMerged, save, StorageKeys } from '@/core/storage';
+import { load, loadMerged, save, StorageKeys } from '@/core/storage';
 import type { DifficultyId } from '@/game/ai/difficulty';
 import { CHARACTERS } from '@/game/characters';
 
@@ -32,6 +32,13 @@ export interface Settings {
 
   /** Draw the tracked skeleton over the preview. */
   showSkeleton: boolean;
+
+  /**
+   * Версия умолчаний, уже применённых к сохранённым настройкам. Нужна, чтобы
+   * новое умолчание (скелет включён) дошло и до тех, у кого настройки уже
+   * сохранены со старым, — один раз, не перетирая их собственный выбор потом.
+   */
+  defaultsRevision: number;
 
   /** Selected camera, or empty for the system default. */
   cameraDeviceId: string;
@@ -79,7 +86,10 @@ export const DEFAULT_SETTINGS: Settings = {
   sensitivity: 1,
   mirrored: true,
   showCamera: true,
-  showSkeleton: false,
+  // Скелет виден по умолчанию: без него игрок не может понять, *что* видит
+  // камера, и любая ошибка распознавания выглядит как «игра не работает».
+  showSkeleton: true,
+  defaultsRevision: 2,
   cameraDeviceId: '',
   keyboardFallback: true,
 
@@ -125,6 +135,14 @@ export function loadSettings(): Settings {
   // authored default — a laptop that opens the game at "ultra" and stutters
   // has already made a bad first impression.
   if (!hasStoredSettings()) stored.quality = getDeviceProfile().suggestedTier;
+
+  // Настройки, сохранённые до ревизии 2, несут `showSkeleton: false` как
+  // тогдашнее умолчание, а не как выбор человека. Включаем один раз.
+  const raw = load<Partial<Settings> | null>(StorageKeys.settings, null);
+  if (raw && (raw.defaultsRevision ?? 1) < 2) {
+    stored.showSkeleton = true;
+    stored.defaultsRevision = 2;
+  }
   return sanitize(stored);
 }
 

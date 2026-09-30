@@ -118,7 +118,9 @@ export const QUALITY_PRESETS: Record<QualityTier, QualitySettings> = {
     shadowBlur: false,
     parallaxLayers: 3,
     renderScale: 0.75,
-    visionHz: 20,
+    // Модель считается в воркере и кадры игре не ест, а 20 Гц — это 50 мс
+    // между снимками: удар целиком укладывается в три кадра.
+    visionHz: 25,
   },
   medium: {
     maxParticles: 320,

@@ -34,6 +34,16 @@ export class CameraMirror {
   showSkeleton = false;
   mirrored = true;
 
+  /**
+   * Крупный режим — в бою. Маленькое окошко в углу годится, чтобы проверить,
+   * что камера вообще работает; чтобы видеть по скелету, как игра читает твой
+   * удар, оно должно быть достаточно большим, чтобы разглядеть локоть.
+   */
+  large = false;
+
+  /** Где на холсте лежит видео — скелет обязан лечь ровно поверх него. */
+  private videoRect = { x: 0, y: 0, w: 0, h: 0 };
+
   constructor(options: MirrorOptions) {
     this.canvas = options.canvas;
     this.video = options.video;
@@ -59,6 +69,7 @@ export class CameraMirror {
 
   draw(skeleton: Skeleton | null, hands: readonly HandFrame[] | null, quality: number): void {
     this.canvas.dataset.visible = this.visible ? 'true' : 'false';
+    this.canvas.dataset.size = this.large ? 'large' : 'small';
     if (!this.visible || !this.ctx) return;
     if (!this.sync()) return;
 
@@ -80,6 +91,7 @@ export class CameraMirror {
 
       const offsetX = (width - drawWidth) / 2;
       const offsetY = (height - drawHeight) / 2;
+      this.videoRect = { x: offsetX, y: offsetY, w: drawWidth, h: drawHeight };
 
       ctx.save();
       if (this.mirrored) {
@@ -96,6 +108,7 @@ export class CameraMirror {
     } else {
       ctx.fillStyle = 'rgba(8, 8, 16, 0.9)';
       ctx.fillRect(0, 0, width, height);
+      this.videoRect = { x: 0, y: 0, w: width, h: height };
     }
 
     if (this.showSkeleton && skeleton?.present) this.drawSkeleton(ctx, skeleton, width, height);
@@ -108,6 +121,12 @@ export class CameraMirror {
    * The tracked body. Bones are tinted by confidence, so a limb the model is
    * guessing about is visibly dimmer — the fastest possible diagnosis of a
    * lighting problem.
+   *
+   * Точки проецируются через тот же прямоугольник, в который легло видео.
+   * Видео вписывается в окно с обрезкой краёв («cover»), а скелет раньше
+   * растягивался на всё окно без неё — и при камере 4:3 в окне 16:9 руки
+   * скелета висели в стороне от настоящих рук. По такому скелету нельзя было
+   * понять ровно то, ради чего он нужен: что именно видит игра.
    */
   private drawSkeleton(
     ctx: CanvasRenderingContext2D,
@@ -116,10 +135,17 @@ export class CameraMirror {
     height: number,
   ): void {
     // `raw` is already mirrored by the tracker, and so is the video above, so
-    // the two line up without any further flipping here.
-    const project = (x: number, y: number): [number, number] => [x * width, y * height];
+    // the two line up without any further flipping here. The cover crop is
+    // symmetric, so mirroring does not move the offset either.
+    const rect = this.videoRect.w > 0 ? this.videoRect : { x: 0, y: 0, w: width, h: height };
+    const project = (x: number, y: number): [number, number] => [
+      rect.x + x * rect.w,
+      rect.y + y * rect.h,
+    ];
+    const scale = Math.max(1, Math.min(width, height) / 124);
 
     ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
     for (const [a, b] of BONES) {
       const ja = skeleton.rawAt(a);
       const jb = skeleton.rawAt(b);
@@ -129,23 +155,52 @@ export class CameraMirror {
       const [ax, ay] = project(ja.x, ja.y);
       const [bx, by] = project(jb.x, jb.y);
 
+      // Тёмная подложка под линией: на светлой футболке зелёный скелет
+      // иначе теряется.
+      ctx.globalAlpha = 0.5 * confidence;
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.9)';
+      ctx.lineWidth = (4 + confidence * 2) * scale;
+      ctx.beginPath();
+      ctx.moveTo(ax, ay);
+      ctx.lineTo(bx, by);
+      ctx.stroke();
+
       ctx.strokeStyle = mix(Palette.ash500, Palette.venom, confidence);
-      ctx.globalAlpha = 0.4 + confidence * 0.6;
-      ctx.lineWidth = 2 + confidence * 2;
+      ctx.globalAlpha = 0.45 + confidence * 0.55;
+      ctx.lineWidth = (2 + confidence * 1.6) * scale;
       ctx.beginPath();
       ctx.moveTo(ax, ay);
       ctx.lineTo(bx, by);
       ctx.stroke();
     }
 
+    // Голова — кружком по носу и ушам, чтобы скелет читался как человек.
+    const nose = skeleton.raw[0];
+    if (nose.visibility > 0.3) {
+      const [nx, ny] = project(nose.x, nose.y);
+      const leftShoulder = skeleton.raw[11];
+      const rightShoulder = skeleton.raw[12];
+      const [lx, ly] = project(leftShoulder.x, leftShoulder.y);
+      const [rx, ry] = project(rightShoulder.x, rightShoulder.y);
+      const radius = Math.max(4 * scale, Math.hypot(lx - rx, ly - ry) * 0.28);
+      ctx.globalAlpha = 0.85;
+      ctx.strokeStyle = Palette.venom;
+      ctx.lineWidth = 2 * scale;
+      ctx.beginPath();
+      ctx.arc(nx, ny, radius, 0, TAU);
+      ctx.stroke();
+    }
+
     ctx.globalAlpha = 1;
-    for (let i = 0; i < skeleton.raw.length; i++) {
+    for (let i = 11; i < skeleton.raw.length; i++) {
       const joint = skeleton.raw[i];
       if (joint.visibility < 0.3) continue;
+      // Пальцы и носки только загромождают картинку.
+      if ((i >= 17 && i <= 22) || i >= 29) continue;
       const [jx, jy] = project(joint.x, joint.y);
       ctx.fillStyle = joint.visibility > 0.7 ? Palette.white : Palette.gold;
       ctx.beginPath();
-      ctx.arc(jx, jy, 2.2, 0, TAU);
+      ctx.arc(jx, jy, 2.4 * scale, 0, TAU);
       ctx.fill();
     }
   }

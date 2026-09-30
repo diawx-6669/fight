@@ -74,6 +74,9 @@ export class KickDetector implements MotionDetector {
   private readonly legs: LegTracker[] = [createLeg('left'), createLeg('right')];
   readonly activeLegs = { left: 0, right: 0 };
 
+  /** Колено уже поднято при невидимых стопах — чтобы сообщить раз за попытку. */
+  private readonly hiddenKneeUp = { left: false, right: false };
+
   update(context: MotionContext, state: MotionState): ActionEvent | null {
     const { skeleton } = context;
     if (!skeleton.present) {
@@ -85,15 +88,19 @@ export class KickDetector implements MotionDetector {
     // phantom kicks every time the player shifted their weight, which is far
     // worse than the technique simply being unavailable and said so in the UI.
     if (!skeleton.legsVisible) {
-      // Говорим об этом только когда человек явно пытался ударить ногой —
-      // иначе игрок, сидящий по пояс в кадре, получал бы эту подсказку
-      // постоянно, хотя играет руками и всем доволен.
-      if (Math.abs(state.lean) > 0.35 || state.crouch > 0.3) {
-        context.mistakes.note('legsHidden', 'none', 0.5, context.now);
-      }
+      // Говорим об этом только когда человек явно пытался ударить ногой.
+      //
+      // Раньше признаком попытки считался наклон корпуса или присед — и это
+      // была ошибка: корпус наклоняется при каждом ударе рукой, так что
+      // «ног не видно» выскакивало посреди боя на руках у человека, который
+      // ногами не бил вовсе. Настоящий признак — колено: если стопы обрезаны
+      // кадром, но колено видно и оно резко пошло вверх, это кик.
+      this.noteHiddenKicks(context);
       this.reset();
       return null;
     }
+    this.hiddenKneeUp.left = false;
+    this.hiddenKneeUp.right = false;
 
     // Both feet in the air means the player is jumping, not kicking.
     if (state.airborne) {
@@ -202,18 +209,24 @@ export class KickDetector implements MotionDetector {
   ): ActionEvent | null {
     const { calibration, sensitivity, now } = context;
 
-    // Did the foot actually leave the ground?
-    const needLift = (MIN_LIFT / (sensitivity * context.assist)) * (1 + calibration.noiseFloor * 2);
-    if (leg.peakHeight < needLift) {
-      context.mistakes.note('kickTooLow', leg.side, leg.peakHeight / needLift, now);
-      return null;
-    }
-
     const travelX = ankleX - leg.startX;
     const travelY = ankleY - leg.startY;
     const travel = Math.hypot(travelX, travelY);
+
+    // Что человек пытался сделать — на случай отказа: режим прощения
+    // исполнит именно этот кик, если ошибка будет повторяться.
+    const intendedTechnique = classifyKick(leg.peakHeight, ankleY, hipY, travelX, travelY);
+    const intended = kickIntent(leg.side, intendedTechnique, now);
+
+    // Did the foot actually leave the ground?
+    const needLift = (MIN_LIFT / (sensitivity * context.assist)) * (1 + calibration.noiseFloor * 2);
+    if (leg.peakHeight < needLift) {
+      context.mistakes.note('kickTooLow', leg.side, leg.peakHeight / needLift, now, intended);
+      return null;
+    }
+
     if (travel < 0.25) {
-      context.mistakes.note('kickTooSlow', leg.side, travel / 0.25, now);
+      context.mistakes.note('kickTooSlow', leg.side, travel / 0.25, now, intended);
       return null;
     }
 
@@ -240,6 +253,37 @@ export class KickDetector implements MotionDetector {
       confidence,
       timestamp: now,
     });
+  }
+
+  /**
+   * Кик при обрезанных стопах: колено видно и поднялось к поясу.
+   * Одна запись на подъём колена, с намерением — ударом этой ногой.
+   */
+  private noteHiddenKicks(context: MotionContext): void {
+    const { skeleton } = context;
+    if (skeleton.upperBodyOnly) return;
+
+    for (const side of ['left', 'right'] as const) {
+      const knee = skeleton.at(side === 'left' ? Joint.LeftKnee : Joint.RightKnee);
+      const hip = skeleton.at(side === 'left' ? Joint.LeftHip : Joint.RightHip);
+      // В стойке колено примерно на телесную единицу ниже таза. Поднятое для
+      // удара — на уровне трети этого расстояния или выше.
+      const raised = knee.visibility > 0.35 && knee.y > hip.y - 0.45;
+      if (raised) {
+        if (!this.hiddenKneeUp[side]) {
+          const progress = clamp(remapClamped(knee.y - hip.y, -1, -0.2, 0, 1), 0.3, 1);
+          context.mistakes.note(
+            'legsHidden', side, progress, context.now,
+            kickIntent(side, 'midKick', context.now),
+          );
+        }
+        this.hiddenKneeUp[side] = true;
+      } else if (knee.visibility <= 0.35 || knee.y < hip.y - 0.7) {
+        // Гистерезис: колено должно опуститься заметно ниже порога, иначе
+        // дрожание на границе засчитывало бы один подъём за несколько.
+        this.hiddenKneeUp[side] = false;
+      }
+    }
   }
 
   reset(): void {
@@ -284,4 +328,18 @@ function kickHeight(technique: Technique): StrikeHeight {
     default:
       return 'mid';
   }
+}
+
+/** Кик, который человек, судя по всему, пытался нанести. */
+function kickIntent(side: 'left' | 'right', technique: Technique, now: number): ActionEvent {
+  return action({
+    kind: 'kick',
+    technique,
+    side,
+    height: kickHeight(technique),
+    power: 0.65,
+    angle: 0,
+    confidence: 0.6,
+    timestamp: now,
+  });
 }

@@ -9,7 +9,8 @@ import { KickDetector } from './kick';
 import { LocomotionDetector } from './locomotion';
 import { PunchDetector } from './punch';
 import { AutoAssist } from './assist';
-import { MistakeLog } from './coach';
+import { MistakeLog, type MistakeCode } from './coach';
+import { Forgiveness } from './forgive';
 import { createMotionState, type ActionEvent, type MotionContext, type MotionState } from './types';
 
 const log = createLogger('motion');
@@ -77,6 +78,17 @@ export class MotionAnalyzer {
    */
   readonly assist = new AutoAssist();
 
+  /**
+   * Режим прощения: одна и та же ошибка пять раз — и игра исполняет то, что
+   * человек пытался сделать, вместо шестой подсказки. См. `forgive.ts`.
+   */
+  readonly forgiveness = new Forgiveness();
+
+  /** Когда в последний раз засчитан прощённый удар каждой конечностью. */
+  private readonly forgivenStrikeAt = new Map<string, number>();
+  private readonly forgivenCodes = new Set<MistakeCode>();
+  private readonly forgivenEvents: ActionEvent[] = [];
+
   private readonly locomotion = new LocomotionDetector();
   private readonly guard = new GuardDetector();
   private readonly punch = new PunchDetector();
@@ -129,6 +141,7 @@ export class MotionAnalyzer {
       sensitivity: this.sensitivity,
       assist: this.assist.level,
       mistakes: this.mistakes,
+      forgiven: this.forgiveness.forgiven,
     };
 
     // 1. Body posture: airborne, crouch, lean, footwork.
@@ -172,6 +185,24 @@ export class MotionAnalyzer {
       this.assist.noteMistake(mistake.code, mistake.progress, now);
     }
 
+    // Прощение. Сначала собираем, потом исполняем: засчитанный удар чистит
+    // лог ошибок, и делать это посреди обхода того же лога нельзя.
+    this.forgivenCodes.clear();
+    this.forgivenEvents.length = 0;
+    for (const mistake of this.mistakes.recent()) {
+      const event = this.forgiveness.consider(mistake);
+      if (!event) continue;
+      this.forgivenCodes.add(mistake.code);
+      this.forgivenEvents.push(event);
+    }
+    this.mistakes.drop(this.forgivenCodes);
+    for (const event of this.forgivenEvents) {
+      this.collect(event);
+      if (event.kind === 'punch' || event.kind === 'kick') {
+        this.forgivenStrikeAt.set(`${event.kind}:${event.side}`, event.timestamp);
+      }
+    }
+
     this.mistakes.settle(now);
   }
 
@@ -182,6 +213,16 @@ export class MotionAnalyzer {
     // exempt from the strike cooldown — ducking under a punch you are also
     // throwing is legitimate.
     const isStrike = event.kind === 'punch' || event.kind === 'kick';
+
+    // Та же рука только что получила прощённый удар — значит, это тот же
+    // самый удар, который детектор всё-таки дорешал. Второй раз не бьём.
+    if (isStrike) {
+      const forgivenAt = this.forgivenStrikeAt.get(`${event.kind}:${event.side}`);
+      if (forgivenAt !== undefined && event.timestamp > forgivenAt &&
+          event.timestamp - forgivenAt < 320) {
+        return;
+      }
+    }
 
     if (isStrike && event.timestamp - this.lastActionAt < GLOBAL_COOLDOWN_MS) {
       this.debug.suppressedCount++;
@@ -247,6 +288,8 @@ export class MotionAnalyzer {
     this.debug.actionCount = 0;
     this.debug.suppressedCount = 0;
     this.mistakes.clear();
+    this.forgiveness.reset();
+    this.forgivenStrikeAt.clear();
 
     const state = this.state;
     state.guarding = false;
@@ -256,6 +299,7 @@ export class MotionAnalyzer {
     state.airborne = false;
     state.airHeight = 0;
     state.advance = 0;
+    state.stepX = 0;
     state.stance = 0;
     state.quality = 0;
   }

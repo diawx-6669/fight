@@ -201,14 +201,48 @@ export class Skeleton {
     return jointAngle(ja.x, ja.y, jb.x, jb.y, jc.x, jc.y);
   }
 
-  /** `0` = elbow fully bent, `1` = arm locked out. */
+  /**
+   * `0` = elbow fully bent, `1` = arm locked out.
+   *
+   * Угол считается в объёме, с глубиной. Раньше — только в плоскости кадра, и
+   * это ломало самый естественный удар: прямой в камеру. Рука, выпрямленная
+   * прямо на объектив, в кадре выглядит короткой и согнутой, и игра отвечала
+   * «рука осталась согнутой» на полностью выпрямленный удар.
+   */
   armExtension(side: 'left' | 'right'): number {
-    const shoulder = side === 'left' ? Joint.LeftShoulder : Joint.RightShoulder;
-    const elbow = side === 'left' ? Joint.LeftElbow : Joint.RightElbow;
-    const wrist = side === 'left' ? Joint.LeftWrist : Joint.RightWrist;
-    const angle = this.angleAt(shoulder, elbow, wrist);
+    const shoulder = this.joints[side === 'left' ? Joint.LeftShoulder : Joint.RightShoulder];
+    const elbow = this.joints[side === 'left' ? Joint.LeftElbow : Joint.RightElbow];
+    const wrist = this.joints[side === 'left' ? Joint.LeftWrist : Joint.RightWrist];
+    const ax = shoulder.x - elbow.x;
+    const ay = shoulder.y - elbow.y;
+    const az = (shoulder.z - elbow.z) * DEPTH_WEIGHT;
+    const cx = wrist.x - elbow.x;
+    const cy = wrist.y - elbow.y;
+    const cz = (wrist.z - elbow.z) * DEPTH_WEIGHT;
+    const denom = Math.hypot(ax, ay, az) * Math.hypot(cx, cy, cz);
+    const angle = denom > 1e-9
+      ? Math.acos(clamp((ax * cx + ay * cy + az * cz) / denom, -1, 1))
+      : Math.PI;
     // A "straight" arm reads around 165°, not 180° — people do not lock out.
     return clamp((angle - 0.9) / (2.88 - 0.9), 0, 1);
+  }
+
+  /**
+   * Расстояние от плеча до кисти в телесных единицах, с учётом глубины.
+   *
+   * Главная величина детектора удара. В плоском варианте удар в сторону
+   * камеры не удлинял руку вовсе — кисть уходила вперёд, а в кадре оставалась
+   * рядом с плечом, — и такой удар не засчитывался никогда, как бы резко его
+   * ни бросали.
+   */
+  armReach(side: 'left' | 'right'): number {
+    const shoulder = this.joints[side === 'left' ? Joint.LeftShoulder : Joint.RightShoulder];
+    const wrist = this.joints[side === 'left' ? Joint.LeftWrist : Joint.RightWrist];
+    return Math.hypot(
+      wrist.x - shoulder.x,
+      wrist.y - shoulder.y,
+      (wrist.z - shoulder.z) * DEPTH_WEIGHT,
+    );
   }
 
   /** `0` = knee fully bent, `1` = leg straight. */
@@ -227,6 +261,16 @@ export class Skeleton {
     return ids.length === 0 ? 0 : sum / ids.length;
   }
 }
+
+/**
+ * Насколько доверять глубине от модели.
+ *
+ * MediaPipe даёт глубину в том же масштабе, что и ширину кадра, но заметно
+ * шумнее. Полный вес делал бы из дрожания глубины ложные удары, нулевой —
+ * не видит удары в камеру вовсе. Шесть десятых — середина, на которой удар
+ * в объектив засчитывается, а стойка на месте остаётся стойкой.
+ */
+export const DEPTH_WEIGHT = 0.6;
 
 /**
  * Torso length as a multiple of shoulder width.

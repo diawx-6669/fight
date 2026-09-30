@@ -23,10 +23,16 @@ export interface Landmark {
 export interface PunchRunResult {
   /** Насколько игра облегчила себе пороги, в процентах. */
   assistPercent: number;
+  /** Какие ошибки игра простила. */
+  forgiven: MistakeCode[];
   actions: { kind: string; technique: string; side: string; power: number }[];
   mistakes: { code: MistakeCode; count: number }[];
   hint: { code: MistakeCode; title: string; fix: string; progress: number } | null;
   quality: number;
+  /** Самый сильный «шаг» за прогон: к камере/от неё и вбок. */
+  maxAdvance: number;
+  minAdvance: number;
+  maxStepX: number;
   upperBodyOnly: boolean;
   torsoLength: number;
 }
@@ -46,6 +52,8 @@ export function runPunch(
     calibration?: Partial<CalibrationProfile>;
     /** Зафиксировать автоподстройку на этом уровне — для прямого сравнения. */
     assist?: number;
+    /** `false` — выключить режим прощения, чтобы мерить сами пороги. */
+    forgive?: boolean;
   } = {},
 ): PunchRunResult {
   const stepMs = options.stepMs ?? 33;
@@ -59,18 +67,26 @@ export function runPunch(
     analyzer.assist.noteMistake = () => {};
     analyzer.assist.noteHit = () => {};
   }
+  if (options.forgive === false) analyzer.forgiveness.consider = () => null;
   const skeleton = new Skeleton();
   const actions: ActionEvent[] = [];
 
+  let maxAdvance = 0;
+  let minAdvance = 0;
+  let maxStepX = 0;
   for (let i = 0; i < frames.length; i++) {
     const present = buildSkeleton(skeleton, frames[i], i * stepMs, false);
     if (present) analyzer.update(skeleton);
     analyzer.drain(actions);
+    maxAdvance = Math.max(maxAdvance, analyzer.state.advance);
+    minAdvance = Math.min(minAdvance, analyzer.state.advance);
+    maxStepX = Math.max(maxStepX, analyzer.state.stepX);
   }
 
   const hint = analyzer.mistakes.hint;
   return {
     assistPercent: analyzer.assist.percent,
+    forgiven: [...analyzer.forgiveness.forgiven],
     actions: actions.map((a) => ({
       kind: a.kind,
       technique: a.technique,
@@ -82,6 +98,9 @@ export function runPunch(
       ? { code: hint.code, title: hint.title, fix: hint.fix, progress: hint.progress }
       : null,
     quality: analyzer.state.quality,
+    maxAdvance,
+    minAdvance,
+    maxStepX,
     upperBodyOnly: skeleton.upperBodyOnly,
     torsoLength: skeleton.torsoLength,
   };

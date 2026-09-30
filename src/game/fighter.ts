@@ -346,6 +346,18 @@ export class Fighter {
   /** Frames the current stun lasts; set when the stun is applied. */
   private stunFrames = 0;
 
+  /**
+   * Куда боец хочет идти, относительно противника: `+1` — к нему.
+   *
+   * Складывается из двух сигналов: `advance` уже относителен противнику (шаг
+   * к камере), а `stepX` — это шаг по комнате в экранных координатах, и
+   * «вправо» становится «вперёд» только пока противник справа.
+   */
+  private get forwardIntent(): number {
+    const motion = this.input.motion;
+    return clamp(motion.advance + (motion.stepX ?? 0) * this.facing, -1, 1);
+  }
+
   private updatePhysics(): void {
     const stats = this.character.stats;
 
@@ -358,10 +370,17 @@ export class Fighter {
       this.vy = 0;
 
       // Walking is only possible when free; being pushed is not.
-      if (this.state === 'idle' && !this.guarding) {
-        const advance = clamp(this.input.motion.advance, -1, 1);
-        const speed = advance >= 0 ? WALK_SPEED : BACKPEDAL_SPEED;
-        const wanted = advance * speed * stats.speed * this.facing;
+      //
+      // Раньше ходьба была запрещена ещё и в блоке — и это ломало её целиком.
+      // Руки у лица — это боевая стойка, которой игра сама учит, и детектор
+      // блока видит её почти всё время. Выходило, что стоящий правильно
+      // человек не мог сдвинуть бойца ни на шаг, как бы ни старался. В блоке
+      // теперь можно идти, только медленнее — как в любом файтинге.
+      if (this.state === 'idle') {
+        const forward = this.forwardIntent;
+        const speed = forward >= 0 ? WALK_SPEED : BACKPEDAL_SPEED;
+        const guardSlowdown = this.guarding ? 0.7 : 1;
+        const wanted = forward * speed * guardSlowdown * stats.speed * this.facing;
         this.vx = damp(this.vx, wanted, 0.08, TICK_SECONDS);
       } else {
         this.vx = damp(this.vx, 0, 1 / GROUND_FRICTION, TICK_SECONDS);
@@ -452,7 +471,7 @@ export class Fighter {
     this.vy = JUMP_VELOCITY * lerp(0.82, 1.1, clamp(power, 0, 1));
     // Carry the current walking momentum into the jump so a running leap goes
     // somewhere rather than straight up.
-    this.vx += this.facing * this.input.motion.advance * 1.4;
+    this.vx += this.facing * this.forwardIntent * 1.4;
   }
 
   dodge(side: 'left' | 'right', power: number): void {

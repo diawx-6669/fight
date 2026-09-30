@@ -1,6 +1,6 @@
 import type { CalibrationProfile } from '../calibration';
 import type { Skeleton } from '../skeleton';
-import type { MistakeLog } from './coach';
+import type { MistakeCode, MistakeLog } from './coach';
 
 /**
  * The contract between "what the camera saw" and "what the fighter does".
@@ -72,8 +72,19 @@ export interface MotionState {
   airborne: boolean;
   /** Normalised air time, `0` on the ground, peaking at `1` at the apex. */
   airHeight: number;
-  /** Stepping intent, `-1` = backing off, `+1` = closing in. */
+  /**
+   * Stepping intent relative to the opponent, `-1` = backing off, `+1` =
+   * closing in. From the camera this is a step *towards* the lens (forward)
+   * or away from it (back) — the direction a person means by "go forward".
+   */
   advance: number;
+  /**
+   * Сдвиг по комнате вбок, в *экранных* координатах: `+1` — шаг вправо, как
+   * его видит сам игрок в зеркальном превью. Отдельно от `advance`, потому
+   * что «вправо» — это «вперёд» только пока боец стоит слева. После
+   * перепрыгивания противника тот же шаг должен уводить назад.
+   */
+  stepX: number;
   /** How wide the stance is relative to the calibrated neutral. */
   stance: number;
   /** Overall trust in the reading, `[0, 1]`. Drops when the player leaves frame. */
@@ -89,6 +100,7 @@ export function createMotionState(): MotionState {
     airborne: false,
     airHeight: 0,
     advance: 0,
+    stepX: 0,
     stance: 0,
     quality: 0,
   };
@@ -122,6 +134,12 @@ export interface MotionContext {
    * сама, и смешивать их значило бы незаметно переписывать чужую настройку.
    */
   readonly assist: number;
+  /**
+   * Ошибки, которые повторились столько раз, что игра перестала их считать
+   * ошибками (см. `forgive.ts`). Детектор непрерывного состояния — присед —
+   * читает это и сам опускает планку: событием его не заменишь, его держат.
+   */
+  readonly forgiven: ReadonlySet<MistakeCode>;
 }
 
 /** A detector emits zero or one action per frame and may update shared state. */

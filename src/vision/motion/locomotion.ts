@@ -33,6 +33,18 @@ export class LocomotionDetector implements MotionDetector {
 
   /** Slowly adapting estimate of the player's neutral horizontal position. */
   private restingCenterX = 0.5;
+  private restingCenterInitialised = false;
+
+  /**
+   * Медленно подстраиваемый масштаб тела в кадре — насколько далеко от камеры
+   * человек стоит «в покое». Шаг к камере делает тело крупнее, от камеры —
+   * мельче, и это и есть «вперёд» и «назад» в понимании игрока.
+   */
+  private restingScale = 0;
+
+  /** Пики попыток, не дотянувших до порога, — по одной записи на попытку. */
+  private subRisePeak = 0;
+  private subCrouchPeak = 0;
 
   private hipVelocity = 0;
   private previousHipY = 0;
@@ -40,6 +52,7 @@ export class LocomotionDetector implements MotionDetector {
   private readonly crouchSignal = new Ema(0.06);
   private readonly leanSignal = new Ema(0.07);
   private readonly advanceSignal = new Ema(0.14);
+  private readonly depthSignal = new Ema(0.16);
 
   private readonly airGate = new Hysteresis(0.5, 0.28, 0.03);
   private readonly crouchGate = new Hysteresis(0.42, 0.26, 0.05);
@@ -93,21 +106,59 @@ export class LocomotionDetector implements MotionDetector {
 
     const airborne = this.airGate.update(rise * sensitivity, dt);
     const crouchRaw = this.crouchSignal.push(drop, dt);
-    const crouching = this.crouchGate.update(crouchRaw * sensitivity, dt);
+    // Присед — удержание, а не событие, поэтому прощение здесь не «исполняет
+    // действие», а опускает планку: после пяти мелких приседов подряд такой
+    // же мелкий присед засчитывается как настоящий и держится, пока держишь.
+    const crouchBoost = context.forgiven.has('crouchTooShallow') ? 1 / 0.6 : 1;
+    const crouching = this.crouchGate.update(crouchRaw * sensitivity * crouchBoost, dt);
 
     state.airborne = airborne;
     state.crouch = airborne ? 0 : clamp(crouchRaw, 0, 1);
 
-    // Попытка, не дошедшая до порога. Гистерезисная защёлка открывается около
-    // единицы, поэтому «больше половины, но не сработало» — это ровно тот
-    // случай, когда человек присел или подпрыгнул, а игра промолчала.
+    // Попытка, не дошедшая до порога: человек присел или подпрыгнул, а игра
+    // промолчала. Сообщаем один раз, в конце попытки — когда таз пошёл
+    // обратно, — а не на каждом кадре: иначе одна попытка считалась бы как
+    // пять, и режим прощения срабатывал бы с первой же.
     const riseSignal = rise * sensitivity;
-    if (!airborne && riseSignal > 0.45 && this.hipVelocity > 0) {
-      context.mistakes.note('jumpTooLow', 'none', riseSignal, context.now);
+    if (!airborne && riseSignal > 0.3 && this.hipVelocity > 0) {
+      this.subRisePeak = Math.max(this.subRisePeak, riseSignal);
     }
-    const crouchSignal = crouchRaw * sensitivity;
-    if (!crouching && crouchSignal > 0.45) {
-      context.mistakes.note('crouchTooShallow', 'none', crouchSignal, context.now);
+    if (airborne) {
+      this.subRisePeak = 0;
+    } else if (this.subRisePeak > 0 && this.hipVelocity <= 0) {
+      context.mistakes.note(
+        'jumpTooLow', 'none', this.subRisePeak / 0.5, context.now,
+        action({
+          kind: 'jump',
+          power: 0.6,
+          confidence: clamp(skeleton.confidence, 0.3, 1),
+          timestamp: context.now,
+        }),
+      );
+      this.subRisePeak = 0;
+    }
+
+    // Защёлка приседа открывается на 0.42. Раньше «мелкий присед» отмечался
+    // выше 0.45 — то есть *после* порога, в те полсотни миллисекунд, пока
+    // защёлка ждала подтверждения. Подсказка выскакивала на каждом удачном
+    // приседе. Мелкий — это тот, что до порога не дошёл и пошёл обратно.
+    const crouchSignal = crouchRaw * sensitivity * crouchBoost;
+    if (crouching || airborne) {
+      this.subCrouchPeak = 0;
+    } else if (crouchSignal > 0.22) {
+      this.subCrouchPeak = Math.max(this.subCrouchPeak, crouchSignal);
+    }
+    if (this.subCrouchPeak > 0 && !crouching && crouchSignal < this.subCrouchPeak * 0.7) {
+      context.mistakes.note(
+        'crouchTooShallow', 'none', this.subCrouchPeak / 0.42, context.now,
+        action({
+          kind: 'crouch',
+          power: 0.6,
+          confidence: clamp(skeleton.confidence, 0.3, 1),
+          timestamp: context.now,
+        }),
+      );
+      this.subCrouchPeak = 0;
     }
 
     let event: ActionEvent | null = null;
@@ -167,12 +218,41 @@ export class LocomotionDetector implements MotionDetector {
 
     // --- footwork ----------------------------------------------------------
 
-    // Stepping left/right in the room drives advance/retreat. The neutral
-    // centre drifts with the player so they are not pinned to one floor tile.
-    this.restingCenterX += (skeleton.hipX - this.restingCenterX) * clamp(dt * 0.12, 0, 0.05);
-    const centerOffset = (skeleton.hipX - this.restingCenterX) / 0.2;
-    const advance = this.advanceSignal.push(clamp(centerOffset, -1.4, 1.4), dt);
-    state.advance = clamp(advance, -1, 1);
+    // Два способа пойти, и оба должны работать, потому что игроки делают оба.
+    //
+    // 1. Шаг вбок по комнате. Это `stepX`, в экранных координатах: шаг вправо
+    //    двигает бойца вправо. Раньше он писался прямо в `advance`, то есть
+    //    «к противнику», и после того как бойцы менялись местами, шаг вправо
+    //    уводил бойца влево.
+    //
+    // 2. Шаг к камере и от неё. Именно так человек понимает «вперёд», и
+    //    именно этого игра не видела вовсе: сколько к экрану ни шагай, боец
+    //    стоял. Шаг к камере делает тело в кадре крупнее — это и меряем.
+    //
+    // Нейтраль у обоих медленно подтягивается за игроком, чтобы он не был
+    // привязан к одной плитке пола: шагнул и стоишь — боец идёт несколько
+    // секунд и останавливается.
+    if (!this.restingCenterInitialised) {
+      this.restingCenterX = skeleton.hipX;
+      this.restingCenterInitialised = true;
+    }
+    this.restingCenterX += (skeleton.hipX - this.restingCenterX) * clamp(dt * 0.15, 0, 0.05);
+    const centerOffset = (skeleton.hipX - this.restingCenterX) / 0.12;
+    const lateral = this.advanceSignal.push(clamp(centerOffset, -1.4, 1.4), dt);
+    state.stepX = clamp(deadZone(lateral, 0.12), -1, 1);
+
+    const bodyScale = skeleton.torsoLength;
+    if (this.restingScale <= 0) this.restingScale = bodyScale;
+    // Во время приседа, прыжка и глубокого наклона торс в кадре меняется сам
+    // по себе, и это не шаг. Нейтраль тогда не учится, а сигнал затухает.
+    const vertical = airborne || state.crouch > 0.3;
+    let depth = 0;
+    if (!vertical && bodyScale > 0 && this.restingScale > 0) {
+      depth = Math.log(bodyScale / this.restingScale) / 0.12;
+      this.restingScale += (bodyScale - this.restingScale) * clamp(dt * 0.15, 0, 0.05);
+    }
+    const forward = this.depthSignal.push(clamp(depth, -1.4, 1.4), dt);
+    state.advance = clamp(deadZone(forward, 0.3), -1, 1);
 
     const leftAnkle = skeleton.at(Joint.LeftAnkle);
     const rightAnkle = skeleton.at(Joint.RightAnkle);
@@ -188,6 +268,11 @@ export class LocomotionDetector implements MotionDetector {
 
   reset(): void {
     this.restingHipInitialised = false;
+    this.restingCenterInitialised = false;
+    this.restingScale = 0;
+    this.subRisePeak = 0;
+    this.subCrouchPeak = 0;
+    this.depthSignal.reset();
     this.hipVelocity = 0;
     this.airborneFor = 0;
     this.jumpEmitted = false;
@@ -199,4 +284,14 @@ export class LocomotionDetector implements MotionDetector {
     this.airGate.reset(false);
     this.crouchGate.reset(false);
   }
+}
+
+/**
+ * Мёртвая зона с плавным выходом: внутри неё ноль, снаружи — сигнал без
+ * скачка на границе. Иначе боец дёргался бы от покачивания на месте.
+ */
+function deadZone(value: number, zone: number): number {
+  const magnitude = Math.abs(value);
+  if (magnitude <= zone) return 0;
+  return Math.sign(value) * ((magnitude - zone) / (1 - zone));
 }

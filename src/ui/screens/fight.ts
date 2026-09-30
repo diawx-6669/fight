@@ -12,6 +12,7 @@ import type { NetClient } from '@/net/client';
 import { buildSnapshot, RemoteFighterSync } from '@/net/sync';
 import type { ActionEvent, Technique } from '@/vision/motion/types';
 import type { MistakeCode } from '@/vision/motion/coach';
+import { FORGIVE_AFTER } from '@/vision/motion/forgive';
 import { FightScene } from '@/render/scene';
 import { DESIGN_HEIGHT, DESIGN_WIDTH } from '@/render/renderer';
 import { alpha, font, mix, Palette, Semantic, TypeScale } from '@/render/theme';
@@ -83,6 +84,8 @@ export class FightScreen extends Screen {
   /** Когда показали сообщение о подстройке и на сколько она подняла шансы. */
   private assistShownAt = 0;
   private assistPercent = 0;
+  private forgiveShownAt = 0;
+  private forgiveLabel = '';
 
   /** Survival only: how many opponents have already been beaten. */
   private streak = 0;
@@ -472,7 +475,12 @@ export class FightScreen extends Screen {
     const down = this.keys.has('KeyS') || this.keys.has('ArrowDown');
     const guard = this.keys.has('ShiftLeft') || this.keys.has('ShiftRight');
 
-    if (left || right) motion.advance = right ? 1 : -1;
+    // Стрелки — экранные: «вправо» двигает бойца вправо, с какой бы стороны
+    // от противника он ни стоял.
+    if (left || right) {
+      motion.stepX = right ? 1 : -1;
+      motion.advance = 0;
+    }
     if (down) motion.crouch = 1;
     if (guard) {
       motion.guarding = true;
@@ -627,6 +635,7 @@ export class FightScreen extends Screen {
     // видно, режим «ошибка» говорит то же самое, только конкретнее, и две
     // панели об одном налезали друг на друга внизу экрана.
     this.drawAssistNotice(ctx);
+    this.drawForgiveNotice(ctx);
     const coached = this.drawCoachHint(ctx);
     if (!coached && !this.context.vision.status.present) this.drawTrackingWarning(ctx);
     if (this.mode === 'training') this.drawTrainingOverlay(ctx);
@@ -722,6 +731,59 @@ export class FightScreen extends Screen {
   }
 
   /**
+   * Режим прощения: одна и та же ошибка повторилась пять раз, и игра перестала
+   * спорить — дальше такие движения засчитываются как задуманные.
+   *
+   * Об этом говорится вслух по той же причине, что и о подстройке порогов:
+   * тихо изменённые правила лишают смысла и попадание, и промах. А ещё
+   * человеку важно понять, что подсказка пропала не потому, что он наконец
+   * «сделал правильно», а потому, что игра поверила ему на слово.
+   */
+  private drawForgiveNotice(ctx: CanvasRenderingContext2D): void {
+    const forgiveness = this.context.vision.analyzer.forgiveness;
+    if (forgiveness.justForgiven) {
+      this.forgiveLabel = MISTAKE_SHORT[forgiveness.justForgiven] ?? '';
+      forgiveness.justForgiven = null;
+      this.forgiveShownAt = this.elapsed;
+      this.context.audio.play('click');
+    }
+
+    const age = this.elapsed - this.forgiveShownAt;
+    if (this.forgiveShownAt === 0 || age > 3.2) return;
+
+    const fade = clamp(Math.min(age / 0.2, (3.2 - age) / 0.4), 0, 1);
+    const width = 620;
+    const x = (DESIGN_WIDTH - width) / 2;
+    // Под сообщением о подстройке, если оба на экране одновременно.
+    const y = this.assistShownAt !== 0 && this.elapsed - this.assistShownAt < 3 ? 276 : 190;
+
+    ctx.save();
+    ctx.globalAlpha = fade;
+    ctx.fillStyle = 'rgba(8, 12, 8, 0.9)';
+    chamferedRect(ctx, x, y, width, 76, 12);
+    ctx.fill();
+    ctx.strokeStyle = alpha(Palette.venom, 0.6);
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    ctx.textAlign = 'center';
+    ctx.fillStyle = Palette.venom;
+    font(ctx, 24, 'display', 700);
+    ctx.fillText('ПОНЯЛ ТЕБЯ — ЗАСЧИТЫВАЮ', DESIGN_WIDTH / 2, y + 34);
+
+    ctx.fillStyle = Palette.ash300;
+    font(ctx, 16, 'ui', 500);
+    ctx.fillText(
+      this.forgiveLabel
+        ? `«${this.forgiveLabel}» 5 раз подряд — дальше такие движения идут в зачёт`
+        : 'Ошибка повторилась 5 раз — дальше такие движения идут в зачёт',
+      DESIGN_WIDTH / 2,
+      y + 60,
+    );
+    ctx.restore();
+  }
+
+  /**
    * Режим «ошибка»: что именно не засчиталось и что с этим делать.
    *
    * Самая важная панель в игре, хотя выглядит скромнее всех. Без неё
@@ -789,6 +851,19 @@ export class FightScreen extends Screen {
     ctx.fillStyle = alpha(Palette.ash500, 0.9);
     font(ctx, 15, 'ui', 500);
     ctx.fillText(`получилось на ${Math.round(near * 100)}%`, x + 26, y + 101);
+
+    // Сколько раз уже повторилась эта ошибка: на пятом игра засчитает сама.
+    // Видно заранее, чтобы человек понимал — его не игнорируют, счёт идёт.
+    const repeats = this.context.vision.analyzer.forgiveness.countOf(hint.code);
+    if (repeats > 0 && repeats < FORGIVE_AFTER) {
+      ctx.textAlign = 'right';
+      ctx.fillStyle = alpha(Palette.venom, 0.85);
+      ctx.fillText(
+        `повтор ${repeats}/${FORGIVE_AFTER} — на ${FORGIVE_AFTER}-м засчитаю сам`,
+        x + width - 22,
+        y + 101,
+      );
+    }
 
     ctx.restore();
     return true;

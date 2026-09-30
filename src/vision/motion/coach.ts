@@ -27,6 +27,8 @@
  * именно её человек исправит следующей попыткой.
  */
 
+import type { ActionEvent } from './types';
+
 /** Что именно не получилось. */
 export type MistakeCode =
   | 'outOfFrame'
@@ -54,6 +56,15 @@ export interface Mistake {
   progress: number;
   /** Отметка времени кадра камеры, миллисекунды. */
   timestamp: number;
+  /**
+   * Что человек, судя по всему, пытался сделать — если это понятно.
+   *
+   * Нужно режиму прощения (`forgive.ts`): когда одна и та же ошибка
+   * повторяется раз за разом, игра перестаёт спорить с человеком и исполняет
+   * именно это. Без намерения прощать нечего — «тебя не видно» не говорит,
+   * какой удар имелся в виду.
+   */
+  intent?: ActionEvent;
 }
 
 interface Advice {
@@ -203,8 +214,14 @@ export class MistakeLog {
    */
   readonly tally = new Map<MistakeCode, number>();
 
-  note(code: MistakeCode, side: 'left' | 'right' | 'none', progress: number, timestamp: number): void {
-    this.items.push({ code, side, progress: Math.max(0, Math.min(1, progress)), timestamp });
+  note(
+    code: MistakeCode,
+    side: 'left' | 'right' | 'none',
+    progress: number,
+    timestamp: number,
+    intent?: ActionEvent,
+  ): void {
+    this.items.push({ code, side, progress: Math.max(0, Math.min(1, progress)), timestamp, intent });
     this.tally.set(code, (this.tally.get(code) ?? 0) + 1);
   }
 
@@ -242,6 +259,19 @@ export class MistakeLog {
   /** Подсказка, которую стоит показать сейчас, или `null`. */
   get hint(): CoachHint | null {
     return this.current;
+  }
+
+  /**
+   * Забирает из кадра ошибки, которые игра уже простила и исполнила: подсказка
+   * «удар слишком плавный» над засчитанным ударом была бы враньём.
+   */
+  drop(codes: ReadonlySet<MistakeCode>): void {
+    if (codes.size === 0) return;
+    let write = 0;
+    for (let read = 0; read < this.items.length; read++) {
+      if (!codes.has(this.items[read].code)) this.items[write++] = this.items[read];
+    }
+    this.items.length = write;
   }
 
   /** Убирает подсказку немедленно — например, когда удар наконец засчитан. */

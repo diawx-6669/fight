@@ -307,6 +307,7 @@ export class World {
     target.airborne = motion.airborne;
     target.airHeight = motion.airHeight;
     target.advance = motion.advance;
+    target.stepX = motion.stepX;
     target.stance = motion.stance;
     target.quality = motion.quality;
   }

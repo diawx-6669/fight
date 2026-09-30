@@ -248,8 +248,11 @@ console.log('\nПодстройка действительно опускает 
   // же движение. Так честнее: после починки порогов обычный удар проходит и
   // без помощи, и сравнивать стало нечего — а вот движение, слишком слабое
   // при любых настройках, показывает сдвиг планки прямо.
-  const strict = runPunch(frames, { calibration, assist: 1 });
-  const helped = runPunch(frames, { calibration, assist: 1.5 });
+  // Прощение выключено: после пяти одинаковых промахов оно начинает
+  // засчитывать удары, и подсказки о близости к порогу больше нет — а здесь
+  // меряется именно порог.
+  const strict = runPunch(frames, { calibration, assist: 1, forgive: false });
+  const helped = runPunch(frames, { calibration, assist: 1.5, forgive: false });
   const a = strict.hint ? strict.hint.progress : 0;
   const b = helped.hint ? helped.hint.progress : 0;
 
@@ -270,6 +273,121 @@ console.log('\nАвтоподстройка не включается, когд�
   check('удары засчитываются', r.actions.filter((a) => a.kind === 'punch').length >= 5,
     `${r.actions.filter((a) => a.kind === 'punch').length} ударов`);
   check('помощь не понадобилась', r.assistPercent === 0, `подстройка ${r.assistPercent}%`);
+}
+
+console.log('\nУдар прямо в камеру (кисть уходит в глубину, а не вбок):');
+{
+  // Самый естественный удар — на экран. В кадре кисть почти не удаляется от
+  // плеча: вся длина удара уходит в глубину. Плоский детектор такого удара
+  // не видел никогда, отвечая «слишком плавный» и «рука согнута».
+  const cx = 0.5, shoulderY = 0.4, span = 0.12;
+  const at = (t) => {
+    const points = {
+      [NOSE]: { x: cx, y: shoulderY - span * 0.85 },
+      [L_SH]: { x: cx - span, y: shoulderY },
+      [R_SH]: { x: cx + span, y: shoulderY },
+      [L_EL]: { x: cx - span * 1.1, y: shoulderY + span * 0.9 },
+      [L_WR]: { x: cx - span * 0.75, y: shoulderY + span * 0.35 },
+      // Локоть и кисть уходят к объективу: z растёт по модулю, x/y почти на месте.
+      [R_EL]: { x: cx + span * 1.05, y: shoulderY + span * (0.7 - 0.6 * t), z: -span * (0.2 + 1.1 * t) },
+      [R_WR]: { x: cx + span * (0.7 + 0.25 * t), y: shoulderY - span * 0.1, z: -span * (0.3 + 2.4 * t) },
+    };
+    const hipY = shoulderY + span * 2.1;
+    Object.assign(points, {
+      [L_HIP]: { x: cx - span * 0.45, y: hipY },
+      [R_HIP]: { x: cx + span * 0.45, y: hipY },
+      [L_KN]: { x: cx - span * 0.42, y: hipY + span * 1.7 },
+      [R_KN]: { x: cx + span * 0.42, y: hipY + span * 1.7 },
+      [L_AN]: { x: cx - span * 0.4, y: hipY + span * 3.4 },
+      [R_AN]: { x: cx + span * 0.4, y: hipY + span * 3.4 },
+    });
+    return frame(points);
+  };
+  const frames = [];
+  for (let i = 0; i < 8; i++) frames.push(at(0));
+  for (let i = 1; i <= 5; i++) { const k = i / 5; frames.push(at(1 - (1 - k) * (1 - k))); }
+  for (let i = 0; i < 3; i++) frames.push(at(1));
+  for (let i = 5; i >= 0; i--) frames.push(at((i / 5) * 0.35));
+  for (let i = 0; i < 8; i++) frames.push(at(0));
+
+  // Калибровка «как у человека»: размах — от нормального удара вбок.
+  const r = runPunch(frames, { calibration: { reachForward: 1.55 }, forgive: false });
+  const punches = r.actions.filter((a) => a.kind === 'punch');
+  check('удар в камеру засчитан', punches.length > 0,
+    `ошибки: ${r.mistakes.map((m) => `${m.code}×${m.count}`).join(', ') || 'нет'}`);
+  if (punches.length) check('удар пришёл правой', punches[0].side === 'right', punches[0].side);
+}
+
+console.log('\nРежим прощения — пять одинаковых ошибок:');
+{
+  // Человек бьёт раз за разом одинаково, а камера раз за разом отвечает
+  // «слишком плавно». На пятом повторе игра обязана перестать спорить и
+  // засчитать удар — и дальше засчитывать такие же.
+  const reference = punchSequence({ scale: 1, fullBody: true });
+  const calibration = calibrationFor(reference);
+  const weak = () => punchSequence({ scale: 1, fullBody: true, travel: 0.45, punchFrames: 7, idleFrames: 8 });
+
+  const four = runPunch([].concat(...Array.from({ length: 4 }, weak)), { calibration, assist: 1 });
+  check('четыре промаха — ещё подсказка, а не удар',
+    four.actions.filter((a) => a.kind === 'punch').length === 0,
+    `ударов: ${four.actions.filter((a) => a.kind === 'punch').length}`);
+
+  const eight = runPunch([].concat(...Array.from({ length: 8 }, weak)), { calibration, assist: 1 });
+  const punches = eight.actions.filter((a) => a.kind === 'punch');
+  check('после пятого повтора удары засчитываются', punches.length >= 3,
+    `ударов: ${punches.length}, прощено: ${eight.forgiven.join(', ') || 'ничего'}`);
+  check('удары правой — той рукой, которой били', punches.every((p) => p.side === 'right'));
+  check('ошибка отмечена как прощённая', eight.forgiven.length > 0);
+  console.log(`    → из 8 одинаковых промахов засчитано ${punches.length}, прощено: ${eight.forgiven.join(', ')}`);
+}
+
+console.log('\nОдин удар — одна ошибка, а не пять:');
+{
+  const reference = punchSequence({ scale: 1, fullBody: true });
+  const frames = punchSequence({ scale: 1, fullBody: true, travel: 0.45, punchFrames: 7 });
+  const r = runPunch(frames, { calibration: calibrationFor(reference), forgive: false });
+  const total = r.mistakes
+    .filter((m) => ['punchTooSlow', 'punchTooShort', 'punchNotExtended'].includes(m.code))
+    .reduce((sum, m) => sum + m.count, 0);
+  check('одна попытка записана не больше двух раз', total >= 1 && total <= 2, `записей: ${total}`);
+}
+
+console.log('\nХодьба:');
+{
+  // Человек стоит, потом делает шаг. `scale` — насколько крупнее стало тело в
+  // кадре (шаг к камере), `dx` — насколько сместился по комнате.
+  const body = (scale, dx) => {
+    const cx = 0.5 + dx, span = 0.1 * scale, shoulderY = 0.5 - span * 2;
+    const hipY = shoulderY + span * 2.1;
+    return frame({
+      [NOSE]: { x: cx, y: shoulderY - span * 0.85 },
+      [L_SH]: { x: cx - span, y: shoulderY }, [R_SH]: { x: cx + span, y: shoulderY },
+      [L_EL]: { x: cx - span * 1.1, y: shoulderY + span * 0.9 },
+      [R_EL]: { x: cx + span * 1.1, y: shoulderY + span * 0.9 },
+      [L_WR]: { x: cx - span * 0.6, y: shoulderY + span * 0.2 },
+      [R_WR]: { x: cx + span * 0.6, y: shoulderY + span * 0.2 },
+      [L_HIP]: { x: cx - span * 0.45, y: hipY }, [R_HIP]: { x: cx + span * 0.45, y: hipY },
+      [L_KN]: { x: cx - span * 0.42, y: hipY + span * 1.7 }, [R_KN]: { x: cx + span * 0.42, y: hipY + span * 1.7 },
+      [L_AN]: { x: cx - span * 0.4, y: hipY + span * 3.4 }, [R_AN]: { x: cx + span * 0.4, y: hipY + span * 3.4 },
+    });
+  };
+  const walk = (toScale, toDx) => {
+    const frames = [];
+    for (let i = 0; i < 30; i++) frames.push(body(1, 0));
+    for (let i = 1; i <= 10; i++) frames.push(body(1 + (toScale - 1) * i / 10, toDx * i / 10));
+    for (let i = 0; i < 30; i++) frames.push(body(toScale, toDx));
+    return frames;
+  };
+
+  const forward = runPunch(walk(1.15, 0), { forgive: false });
+  check('шаг к камере — боец идёт вперёд', forward.maxAdvance > 0.5, `advance ${forward.maxAdvance.toFixed(2)}`);
+  const back = runPunch(walk(0.87, 0), { forgive: false });
+  check('шаг от камеры — боец отходит', back.minAdvance < -0.5, `advance ${back.minAdvance.toFixed(2)}`);
+  const side = runPunch(walk(1, 0.1), { forgive: false });
+  check('шаг вправо по комнате — боец идёт вправо', side.maxStepX > 0.5, `stepX ${side.maxStepX.toFixed(2)}`);
+  const still = runPunch(walk(1, 0), { forgive: false });
+  check('стоишь на месте — боец стоит', still.maxAdvance === 0 && still.minAdvance === 0 && still.maxStepX === 0,
+    `advance ${still.minAdvance.toFixed(2)}…${still.maxAdvance.toFixed(2)}, stepX ${still.maxStepX.toFixed(2)}`);
 }
 
 if (failures > 0) {

@@ -1,6 +1,6 @@
-import { clamp, distance, remapClamped } from '@/core/math';
+import { clamp, remapClamped } from '@/core/math';
 import { NumericRing } from '@/core/pool';
-import { Joint } from '../skeleton';
+import { DEPTH_WEIGHT, Joint } from '../skeleton';
 import {
   action,
   type ActionEvent,
@@ -44,7 +44,14 @@ interface ArmTracker {
   /** Where the wrist was when the extension began, for measuring the arc. */
   startX: number;
   startY: number;
+  startZ: number;
   startExtension: number;
+  /**
+   * Пик скорости движения, не дотянувшего до порога. Нужен, чтобы сообщить о
+   * «слишком плавном» ударе один раз за попытку, в её конце, а не на каждом
+   * кадре, пока рука идёт: режим прощения считает попытки, а не кадры.
+   */
+  subPeak: number;
   phaseElapsed: number;
   cooldown: number;
   /** Сколько секунд модель подряд не видит эту руку. */
@@ -63,7 +70,9 @@ function createArm(side: 'left' | 'right'): ArmTracker {
     peakSpeed: 0,
     startX: 0,
     startY: 0,
+    startZ: 0,
     startExtension: 0,
+    subPeak: 0,
     phaseElapsed: 0,
     cooldown: 0,
     hiddenFor: 0,
@@ -220,7 +229,14 @@ export class PunchDetector implements MotionDetector {
       arm.hiddenFor += dt;
       const lostMidPunch = arm.phase === 'extending';
       const lostForLong = arm.hiddenFor > 1 && this.otherArmActive(arm.side);
-      if (lostMidPunch || lostForLong) {
+      if (lostMidPunch) {
+        // Рука пропала посреди выброса — удар был, его просто не досмотрели.
+        // Намерение понятно, и режим прощения может его исполнить.
+        context.mistakes.note(
+          'armHidden', arm.side, Math.max(visibility / 0.5, 0.5), context.now,
+          punchIntent(arm.side, arm.side === 'left' ? 'jab' : 'cross', 'mid', context.now),
+        );
+      } else if (lostForLong) {
         context.mistakes.note('armHidden', arm.side, visibility / 0.5, context.now);
       }
       arm.phase = 'idle';
@@ -231,7 +247,8 @@ export class PunchDetector implements MotionDetector {
     arm.hiddenFor = 0;
 
     arm.previousReach = arm.reach;
-    arm.reach = distance(shoulder.x, shoulder.y, wrist.x, wrist.y);
+    // С глубиной: удар прямо в камеру удлиняет руку не в кадре, а к объективу.
+    arm.reach = skeleton.armReach(arm.side);
     arm.radialSpeed = dt > 0 ? (arm.reach - arm.previousReach) / dt : 0;
     arm.speedHistory.push(arm.radialSpeed);
 
@@ -249,6 +266,7 @@ export class PunchDetector implements MotionDetector {
             context.mistakes.note(
               'punchTooSoon', arm.side,
               1 - arm.cooldown / (ARM_COOLDOWN / Math.max(sensitivity, 0.5)), context.now,
+              punchIntent(arm.side, arm.side === 'left' ? 'jab' : 'cross', 'mid', context.now),
             );
           }
           break;
@@ -280,21 +298,40 @@ export class PunchDetector implements MotionDetector {
           arm.peakSpeed = arm.radialSpeed;
           arm.startX = wrist.x;
           arm.startY = wrist.y;
+          arm.startZ = wrist.z;
           arm.startExtension = extension;
+          arm.subPeak = 0;
           break;
         }
 
         // Движение было, но не дотянуло до порога. Это самая частая причина
         // жалобы «игра меня не видит»: человек бьёт плавно, а детектор ждёт
-        // баллистического выброса — и до этой ветки не говорил об этом ничего.
+        // баллистического выброса.
         //
         // Нижняя граница отделяет попытку ударить от обычного движения рукой.
-        // Ставить её высоко соблазнительно — меньше ложных подсказок, — но
-        // именно слабый, вполсилы обозначенный удар остаётся без ответа чаще
-        // всего, а человек при этом уверен, что ударил. Треть порога ловит
-        // такие попытки и всё ещё пропускает мимо ушей почёсывание носа.
+        // Треть порога ловит удар вполсилы и всё ещё пропускает мимо ушей
+        // почёсывание носа.
+        //
+        // Сообщаем один раз, когда попытка закончилась — скорость пошла на
+        // спад. Раньше запись шла на каждом кадре, пока рука разгонялась, и
+        // один удар выглядел как пять неудачных: и подсказка, и счётчик
+        // повторов врали.
         if (arm.radialSpeed > bar * 0.3) {
-          context.mistakes.note('punchTooSlow', arm.side, arm.radialSpeed / bar, context.now);
+          if (arm.subPeak === 0) {
+            arm.startX = wrist.x;
+            arm.startY = wrist.y;
+          }
+          arm.subPeak = Math.max(arm.subPeak, arm.radialSpeed);
+        }
+        if (arm.subPeak > 0 && (arm.radialSpeed < arm.subPeak * 0.6 || arm.radialSpeed <= bar * 0.3)) {
+          const technique = classifyPunch(
+            arm.side, wrist.x - arm.startX, wrist.y - arm.startY, extension, wrist.y, shoulder.y,
+          );
+          context.mistakes.note(
+            'punchTooSlow', arm.side, arm.subPeak / bar, context.now,
+            punchIntent(arm.side, technique, punchHeight(wrist.y, shoulder.y), context.now),
+          );
+          arm.subPeak = 0;
         }
         break;
       }
@@ -310,7 +347,7 @@ export class PunchDetector implements MotionDetector {
 
         if (!decelerating && !stalled && !timedOut) break;
 
-        const event = this.resolve(arm, context, wrist.x, wrist.y, extension, shoulder.y);
+        const event = this.resolve(arm, context, wrist.x, wrist.y, wrist.z, extension, shoulder.y);
         arm.phase = 'recovering';
         arm.phaseElapsed = 0;
         arm.cooldown = ARM_COOLDOWN / Math.max(sensitivity, 0.5);
@@ -339,6 +376,7 @@ export class PunchDetector implements MotionDetector {
     context: MotionContext,
     wristX: number,
     wristY: number,
+    wristZ: number,
     extension: number,
     shoulderY: number,
   ): ActionEvent | null {
@@ -346,7 +384,17 @@ export class PunchDetector implements MotionDetector {
 
     const travelX = wristX - arm.startX;
     const travelY = wristY - arm.startY;
-    const travel = Math.hypot(travelX, travelY);
+    const travelZ = (wristZ - arm.startZ) * DEPTH_WEIGHT;
+    const travel = Math.hypot(travelX, travelY, travelZ);
+
+    // Что человек пытался сделать — на случай отказа ниже. Режим прощения
+    // исполнит именно это, если ошибка будет повторяться.
+    const intended = punchIntent(
+      arm.side,
+      classifyPunch(arm.side, travelX, travelY, extension, wristY, shoulderY),
+      punchHeight(wristY, shoulderY),
+      now,
+    );
 
     // Reject twitches: the hand must actually have gone somewhere.
     // Требование к пути ограничено и сверху, и снизу.
@@ -369,7 +417,7 @@ export class PunchDetector implements MotionDetector {
       // но человек в этот момент не бил, и подсказка «ты не дотянулся, 0%»
       // была бы неправдой о том, чего он не делал.
       if (travel > minTravel * 0.25) {
-        context.mistakes.note('punchTooShort', arm.side, travel / minTravel, now);
+        context.mistakes.note('punchTooShort', arm.side, travel / minTravel, now, intended);
       }
       return null;
     }
@@ -381,7 +429,7 @@ export class PunchDetector implements MotionDetector {
       // указывать на то, что он почти выполнил, а не на случайный из двух.
       context.mistakes.note(
         'punchNotExtended', arm.side,
-        Math.max(extensionGain / 0.08, extension / 0.62), now,
+        Math.max(extensionGain / 0.08, extension / 0.62), now, intended,
       );
       return null;
     }
@@ -416,6 +464,7 @@ export class PunchDetector implements MotionDetector {
       arm.peakSpeed = 0;
       arm.phaseElapsed = 0;
       arm.cooldown = 0;
+      arm.subPeak = 0;
       arm.speedHistory.clear();
     }
     this.activeArms.left = 0;
@@ -464,4 +513,23 @@ function punchHeight(wristY: number, shoulderY: number): StrikeHeight {
   if (wristY > shoulderY + 0.18) return 'high';
   if (wristY < shoulderY - 0.55) return 'low';
   return 'mid';
+}
+
+/** Удар, который человек, судя по всему, пытался нанести. */
+function punchIntent(
+  side: 'left' | 'right',
+  technique: Technique,
+  height: StrikeHeight,
+  now: number,
+): ActionEvent {
+  return action({
+    kind: 'punch',
+    technique,
+    side,
+    height,
+    power: 0.6,
+    angle: 0,
+    confidence: 0.6,
+    timestamp: now,
+  });
 }

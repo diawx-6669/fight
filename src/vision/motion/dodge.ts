@@ -44,6 +44,9 @@ export class DodgeDetector implements MotionDetector {
   private lastDirection: -1 | 0 | 1 = 0;
   private settled = true;
   private hasPrevious = false;
+  /** Пик скорости качка, не дотянувшего до порога, — одна запись на попытку. */
+  private subPeak = 0;
+  private subDirection: -1 | 1 = 1;
 
   update(context: MotionContext, state: MotionState): ActionEvent | null {
     const { dt, sensitivity, skeleton, calibration } = context;
@@ -78,14 +81,34 @@ export class DodgeDetector implements MotionDetector {
 
     const threshold = SLIP_SPEED / sensitivity;
     const speed = Math.abs(this.leanVelocity);
+    const direction: -1 | 1 = this.leanVelocity > 0 ? 1 : -1;
     if (speed < threshold) {
-      if (speed > threshold * 0.4) {
-        context.mistakes.note('dodgeTooSmall', 'none', speed / threshold, context.now);
+      // Одна запись на попытку, в её конце: раньше каждый кадр качка писал
+      // свою ошибку, и одно движение корпусом считалось за пять.
+      if (speed > threshold * 0.4 && (this.subPeak === 0 || direction === this.subDirection)) {
+        if (speed > this.subPeak) {
+          this.subPeak = speed;
+          this.subDirection = direction;
+        }
+      } else if (this.subPeak > 0) {
+        const side = this.subDirection > 0 ? 'right' : 'left';
+        context.mistakes.note(
+          'dodgeTooSmall', side, this.subPeak / threshold, context.now,
+          action({
+            kind: 'dodge',
+            side,
+            power: 0.6,
+            angle: this.subDirection > 0 ? 0 : Math.PI,
+            confidence: clamp(skeleton.confidence, 0.2, 1),
+            timestamp: context.now,
+          }),
+        );
+        this.subPeak = 0;
       }
       return null;
     }
+    this.subPeak = 0;
 
-    const direction: -1 | 1 = this.leanVelocity > 0 ? 1 : -1;
     // A slip that reverses immediately is a wobble, not a dodge.
     if (direction === this.lastDirection) return null;
 
@@ -119,5 +142,6 @@ export class DodgeDetector implements MotionDetector {
     this.lastDirection = 0;
     this.settled = true;
     this.hasPrevious = false;
+    this.subPeak = 0;
   }
 }

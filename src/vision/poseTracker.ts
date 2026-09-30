@@ -209,7 +209,7 @@ export class PoseTracker {
       produced = this.applyLandmarks(this.pendingLandmarks, this.pendingAt || now);
     }
 
-    if (!this.frameInFlight && now - this.lastDetectAt >= this.intervalMs) {
+    if (!this.frameInFlight && now - this.lastDetectAt >= this.intervalMs && this.isNewVideoFrame(video)) {
       this.lastDetectAt = now;
       this.sendFrame(video, now);
     }
@@ -252,6 +252,66 @@ export class PoseTracker {
       });
   }
 
+  /** Счётчик кадров, реально показанных видео, и тот, что ушёл в модель. */
+  private presentedFrames = 0;
+  private consumedFrames = -1;
+  private watchedVideo: HTMLVideoElement | null = null;
+  private lastPresentedAt = 0;
+  /** Поколение цепочки колбэков: старая цепочка, увидев новое, затихает. */
+  private frameWatchGeneration = 0;
+
+  /**
+   * Пришёл ли от камеры новый кадр с прошлого прогона.
+   *
+   * Камера отдаёт 30 кадров в секунду, а распознавание на высоком качестве
+   * просит 45–60. Без этой проверки каждый третий прогон получал *тот же*
+   * кадр, модель возвращала те же точки, и скорость кисти в этом кадре
+   * становилась нулевой. Детектор удара видел «рука остановилась» посреди
+   * выброса и закрывал удар раньше времени — с укороченным путём, то есть
+   * с ошибкой «не дотянулся» на полностью честном ударе.
+   *
+   * Новые кадры считаются через `requestVideoFrameCallback`. Где его нет,
+   * проверка всегда отвечает «да» — как было раньше: лучше лишний прогон, чем
+   * распознавание, которое встало, потому что браузер не сообщает о кадрах.
+   */
+  private isNewVideoFrame(video: HTMLVideoElement): boolean {
+    type FrameCallbackVideo = HTMLVideoElement & {
+      requestVideoFrameCallback?: (callback: () => void) => number;
+    };
+    const target = video as FrameCallbackVideo;
+    if (typeof target.requestVideoFrameCallback !== 'function') return true;
+
+    if (this.watchedVideo !== video) {
+      this.watchedVideo = video;
+      this.presentedFrames = 0;
+      this.consumedFrames = -1;
+      const generation = ++this.frameWatchGeneration;
+      const tick = () => {
+        if (this.frameWatchGeneration !== generation) return;
+        this.presentedFrames++;
+        this.lastPresentedAt = performance.now();
+        target.requestVideoFrameCallback!(tick);
+      };
+      target.requestVideoFrameCallback(tick);
+      // Первый вызов пропускаем без ожидания: колбэк может прийти только со
+      // следующим кадром, а ждать его незачем.
+      this.consumedFrames = this.presentedFrames;
+      this.lastPresentedAt = performance.now();
+      return true;
+    }
+
+    // Колбэки замолчали надолго (поток перезапустили, вкладку усыпляли) —
+    // цепочку заводим заново, а до тех пор не мешаем распознаванию.
+    if (performance.now() - this.lastPresentedAt > 500) {
+      this.watchedVideo = null;
+      return true;
+    }
+
+    if (this.presentedFrames === this.consumedFrames) return false;
+    this.consumedFrames = this.presentedFrames;
+    return true;
+  }
+
   setRate(hz: number): void {
     this.requestedIntervalMs = 1000 / Math.max(5, hz);
   }
@@ -272,6 +332,11 @@ export class PoseTracker {
    * всё подряд.
    */
   private get intervalMs(): number {
+    // В воркере модель главный поток не блокирует, и запас «оставить кадр
+    // игре» там не нужен: темп уже ограничен правилом «один кадр в полёте».
+    // Раньше запас применялся и тут, и при прогоне в 25 мс распознавание
+    // само опускалось до ~18 Гц — каждое движение видно на кадр-два позже.
+    if (this.worker) return this.requestedIntervalMs;
     return Math.max(this.requestedIntervalMs, this.smoothedInferenceMs * INFERENCE_HEADROOM);
   }
 
@@ -318,6 +383,7 @@ export class PoseTracker {
 
     if (!this.landmarker) return false;
     if (now - this.lastDetectAt < this.intervalMs) return false;
+    if (!this.isNewVideoFrame(video)) return false;
 
     this.lastDetectAt = now;
 
@@ -403,6 +469,7 @@ export class PoseTracker {
     this.stats.lostStreak = 0;
     this.stats.missedFrames = 0;
     this.lastFrameTime = 0;
+    this.consumedFrames = -1;
   }
 
   dispose(): void {
@@ -422,23 +489,47 @@ export class PoseTracker {
  * `beta` is the responsiveness knob: high on the hands so a jab is not smeared
  * into a push, low on the hips so the fighter's stance does not shimmer.
  */
-function filterProfileFor(jointIndex: number): { minCutoff: number; beta: number } {
+function filterProfileFor(jointIndex: number): {
+  minCutoff: number;
+  beta: number;
+  derivativeCutoff: number;
+} {
+  // Почему `beta` здесь в сотни раз больше, чем было.
+  //
+  // Точки приходят в нормированных координатах кадра: вся ширина — это 1.
+  // Удар проносит кисть через пятую часть кадра за полторы десятых секунды,
+  // то есть скорость порядка 1–3 единиц в секунду. При прежнем `beta = 0.05`
+  // фильтр на такой скорости открывался на десятые доли герца — практически
+  // никак, и работал как обычное тяжёлое сглаживание на ~2 Гц. Прогон
+  // синтетического удара через него: пиковая скорость падала с 2.3 до 1.0
+  // (больше чем вдвое) и приходила на 50–70 мс позже.
+  //
+  // Именно это игрок и видел: сколько ни бей — «удар слишком плавный», и
+  // «камера отстаёт». Фильтр буквально превращал резкий удар в плавный.
+  //
+  // Значения ниже подобраны тем же прогоном: на ударе теряется ~10% скорости
+  // и ноль кадров задержки, а дрожание в покое растёт едва заметно (с 0.41 до
+  // 0.50 тысячных кадра). Производная сглаживается на 4–5 Гц вместо 1 Гц:
+  // при 1 Гц она сама запаздывала на ~160 мс, и фильтр «открывался» уже
+  // после того, как удар закончился.
+  //
   // Wrists, hands and fingers — the fastest things on a body.
   if (
     (jointIndex >= 15 && jointIndex <= 22) ||
     jointIndex === 31 ||
     jointIndex === 32
   ) {
-    return { minCutoff: 1.9, beta: 0.05 };
+    return { minCutoff: 3.0, beta: 20, derivativeCutoff: 5 };
   }
   // Elbows, knees, ankles — fast but heavier.
   if ((jointIndex >= 13 && jointIndex <= 14) || (jointIndex >= 25 && jointIndex <= 30)) {
-    return { minCutoff: 1.6, beta: 0.03 };
+    return { minCutoff: 2.5, beta: 12, derivativeCutoff: 4 };
   }
   // Head and face — only used for aiming the silhouette's gaze.
   if (jointIndex <= 10) {
-    return { minCutoff: 1.0, beta: 0.008 };
+    return { minCutoff: 1.2, beta: 1, derivativeCutoff: 1.5 };
   }
-  // Shoulders and hips — the reference frame; stability beats speed.
-  return { minCutoff: 0.9, beta: 0.006 };
+  // Shoulders and hips — the reference frame. Stability matters, but the hips
+  // also drive jumps and footwork, so they must not trail the body by a beat.
+  return { minCutoff: 1.4, beta: 3, derivativeCutoff: 2 };
 }

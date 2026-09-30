@@ -503,6 +503,10 @@ export class App {
     //    An empty black rectangle where a camera feed should be looks like a
     //    bug, so it hides itself whenever there is nothing to show.
     this.mirror.visible = this.settings.showCamera && this.vision.status.cameraActive;
+    // В бою окно камеры крупнее: по скелету на нём игрок видит, что именно
+    // распознаёт игра, — а для этого надо разглядеть локти и кисти.
+    const screenId = this.router.current?.id;
+    this.mirror.large = screenId === 'fight' || screenId === 'pause';
     this.mirror.draw(
       this.vision.skeleton,
       this.settings.showSkeleton ? this.vision.hands.hands : null,

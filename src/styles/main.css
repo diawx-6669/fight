@@ -116,6 +116,13 @@ body {
   transform: none;
 }
 
+/* В бою окно камеры крупнее: на нём рисуется скелет, по которому игра
+   распознаёт движения, и его надо успеть разглядеть боковым зрением. */
+.mirror[data-size='large'] {
+  width: 336px;
+  height: 189px;
+}
+
 /* --- boot splash ---------------------------------------------------------- */
 
 .boot {
@@ -323,7 +330,8 @@ body {
 }
 
 @media (max-width: 720px) {
-  .mirror {
+  .mirror,
+  .mirror[data-size='large'] {
     width: 148px;
     height: 84px;
     right: 12px;
