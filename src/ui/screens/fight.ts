@@ -80,6 +80,10 @@ export class FightScreen extends Screen {
   private levelsGained = 0;
   private levelBonus = 0;
 
+  /** Когда показали сообщение о подстройке и на сколько она подняла шансы. */
+  private assistShownAt = 0;
+  private assistPercent = 0;
+
   /** Survival only: how many opponents have already been beaten. */
   private streak = 0;
 
@@ -622,6 +626,7 @@ export class FightScreen extends Screen {
     // Подсказка вместо предупреждения, а не вместе с ним. Когда человека не
     // видно, режим «ошибка» говорит то же самое, только конкретнее, и две
     // панели об одном налезали друг на друга внизу экрана.
+    this.drawAssistNotice(ctx);
     const coached = this.drawCoachHint(ctx);
     if (!coached && !this.context.vision.status.present) this.drawTrackingWarning(ctx);
     if (this.mode === 'training') this.drawTrainingOverlay(ctx);
@@ -663,6 +668,56 @@ export class FightScreen extends Screen {
     ctx.fillStyle = Palette.ash500;
     font(ctx, 17, 'ui', 400);
     ctx.fillText('Нажми ESC и зайди в бой заново', DESIGN_WIDTH / 2, y + 138);
+    ctx.restore();
+  }
+
+  /**
+   * Сообщение о том, что игра подстроила пороги под игрока.
+   *
+   * Подстройка нужна: правильного порога, подходящего всем, не существует, и
+   * когда человек десять раз почти ударил и ни разу не попал, виноват порог, а
+   * не человек. Но молча подкрученная сложность — это обман, даже когда он в
+   * пользу игрока: он лишает смысла и попадание, и промах. Поэтому игра
+   * говорит вслух, один раз, и не извиняется.
+   */
+  private drawAssistNotice(ctx: CanvasRenderingContext2D): void {
+    const assist = this.context.vision.analyzer.assist;
+    if (assist.justChanged) {
+      assist.justChanged = false;
+      this.assistShownAt = this.elapsed;
+      this.assistPercent = assist.percent;
+      this.context.audio.play('click');
+    }
+
+    const age = this.elapsed - this.assistShownAt;
+    if (this.assistShownAt === 0 || age > 3) return;
+
+    const fade = clamp(Math.min(age / 0.2, (3 - age) / 0.4), 0, 1);
+    const width = 560;
+    const x = (DESIGN_WIDTH - width) / 2;
+    const y = 190;
+
+    ctx.save();
+    ctx.globalAlpha = fade;
+    ctx.fillStyle = 'rgba(8, 12, 8, 0.9)';
+    chamferedRect(ctx, x, y, width, 76, 12);
+    ctx.fill();
+    ctx.strokeStyle = alpha(Palette.venom, 0.6);
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    ctx.textAlign = 'center';
+    ctx.fillStyle = Palette.venom;
+    font(ctx, 24, 'display', 700);
+    ctx.fillText('ПОДСТРОИЛ ПОД ТЕБЯ', DESIGN_WIDTH / 2, y + 34);
+
+    ctx.fillStyle = Palette.ash300;
+    font(ctx, 16, 'ui', 500);
+    ctx.fillText(
+      `Удары засчитываются легче на ${this.assistPercent}% — бей как бьёшь`,
+      DESIGN_WIDTH / 2,
+      y + 60,
+    );
     ctx.restore();
   }
 
@@ -890,7 +945,8 @@ export class FightScreen extends Screen {
     font(ctx, TypeScale.micro, 'ui', 500);
     ctx.fillStyle = Palette.ash500;
     ctx.fillText(
-      `распознано ${analyzer.debug.actionCount} · отброшено ${analyzer.debug.suppressedCount}`,
+      `распознано ${analyzer.debug.actionCount} · отброшено ${analyzer.debug.suppressedCount}` +
+        (analyzer.assist.percent > 0 ? ` · помощь +${analyzer.assist.percent}%` : ''),
       x + 24,
       y + height - 58,
     );

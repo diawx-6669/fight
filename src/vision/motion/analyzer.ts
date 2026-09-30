@@ -8,6 +8,7 @@ import { GuardDetector } from './guard';
 import { KickDetector } from './kick';
 import { LocomotionDetector } from './locomotion';
 import { PunchDetector } from './punch';
+import { AutoAssist } from './assist';
 import { MistakeLog } from './coach';
 import { createMotionState, type ActionEvent, type MotionContext, type MotionState } from './types';
 
@@ -67,6 +68,15 @@ export class MotionAnalyzer {
    */
   readonly mistakes = new MistakeLog();
 
+  /**
+   * Автоподстройка порогов.
+   *
+   * Живёт на анализаторе, потому что решение принимается по всем детекторам
+   * сразу: «человек бьёт, а игра не засчитывает» — утверждение про игрока,
+   * а не про отдельный детектор.
+   */
+  readonly assist = new AutoAssist();
+
   private readonly locomotion = new LocomotionDetector();
   private readonly guard = new GuardDetector();
   private readonly punch = new PunchDetector();
@@ -117,6 +127,7 @@ export class MotionAnalyzer {
       dt,
       now,
       sensitivity: this.sensitivity,
+      assist: this.assist.level,
       mistakes: this.mistakes,
     };
 
@@ -155,6 +166,12 @@ export class MotionAnalyzer {
     this.debug.legActivity.left = this.kick.activeLegs.left;
     this.debug.legActivity.right = this.kick.activeLegs.right;
 
+    // Промахи «чуть-чуть» без единого попадания — сигнал, что порог стоит не
+    // там. Смотрим на то, что накопилось за кадр, до того как лог очистится.
+    for (const mistake of this.mistakes.recent()) {
+      this.assist.noteMistake(mistake.code, mistake.progress, now);
+    }
+
     this.mistakes.settle(now);
   }
 
@@ -181,6 +198,7 @@ export class MotionAnalyzer {
       this.lastActionAt = event.timestamp;
       // Движение засчитано — держать над ним «ты не дотянулся» больше незачем.
       this.mistakes.clear();
+      this.assist.noteHit(event.timestamp);
     }
     this.pending.push(event);
     this.debug.lastAction = event;

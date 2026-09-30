@@ -190,6 +190,59 @@ console.log('\nРежим «ошибка» — рука вне кадра:');
     `ошибки: ${codes.join(', ') || 'нет'}`);
 }
 
+console.log('\nАвтоподстройка — игра, которая не видит ударов:');
+{
+  // Человек бьёт раз за разом почти как надо, и ни один удар не проходит.
+  // Именно так выглядит жалоба «сайт не видит моих ударов»: дело не в том,
+  // что он делает не то, а в том, что порог стоит не там.
+  const reference = punchSequence({ scale: 1, fullBody: true });
+  const calibration = calibrationFor(reference);
+
+  let frames = [];
+  for (let i = 0; i < 12; i++) {
+    frames = frames.concat(punchSequence({ scale: 1, fullBody: true, travel: 0.5, punchFrames: 6, idleFrames: 8 }));
+  }
+  const r = runPunch(frames, { calibration });
+
+  check('игра заметила, что пороги не по человеку', r.assistPercent > 0,
+    `подстройка ${r.assistPercent}%`);
+  check('но не опустила их безгранично', r.assistPercent <= 50,
+    `подстройка ${r.assistPercent}%`);
+  console.log(`    → облегчила пороги на ${r.assistPercent}%`);
+}
+
+console.log('\nПодстройка действительно опускает порог:');
+{
+  const reference = punchSequence({ scale: 1, fullBody: true });
+  const calibration = calibrationFor(reference);
+  let frames = [];
+  for (let i = 0; i < 10; i++) {
+    frames = frames.concat(punchSequence({ scale: 1, fullBody: true, travel: 0.55, punchFrames: 6, idleFrames: 8 }));
+  }
+
+  const strict = runPunch(frames, { calibration, assist: 1 });
+  const helped = runPunch(frames, { calibration, assist: 1.5 });
+  const a = strict.actions.filter((x) => x.kind === 'punch').length;
+  const b = helped.actions.filter((x) => x.kind === 'punch').length;
+
+  check('с подстройкой засчитывается больше ударов', b > a, `${a} → ${b}`);
+  console.log(`    → без помощи ${a}, с помощью ${b}`);
+}
+
+console.log('\nАвтоподстройка не включается, когда всё и так работает:');
+{
+  let frames = [];
+  for (let i = 0; i < 10; i++) {
+    frames = frames.concat(punchSequence({ scale: 1, fullBody: true, idleFrames: 3 }));
+  }
+  const reference = punchSequence({ scale: 1, fullBody: true });
+  const r = runPunch(frames, { calibration: calibrationFor(reference) });
+
+  check('удары засчитываются', r.actions.filter((a) => a.kind === 'punch').length >= 5,
+    `${r.actions.filter((a) => a.kind === 'punch').length} ударов`);
+  check('помощь не понадобилась', r.assistPercent === 0, `подстройка ${r.assistPercent}%`);
+}
+
 if (failures > 0) {
   console.error(`\n${failures} проверок не прошло.`);
   process.exit(1);

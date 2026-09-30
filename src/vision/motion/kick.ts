@@ -141,7 +141,7 @@ export class KickDetector implements MotionDetector {
     const lift = ankle.y - restingAnkleY;
     const otherLift = otherAnkle.y - restingAnkleY;
 
-    const launchThreshold = LAUNCH_SPEED / sensitivity;
+    const launchThreshold = LAUNCH_SPEED / (sensitivity * context.assist);
 
     switch (leg.phase) {
       case 'idle': {
@@ -203,7 +203,7 @@ export class KickDetector implements MotionDetector {
     const { calibration, sensitivity, now } = context;
 
     // Did the foot actually leave the ground?
-    const needLift = (MIN_LIFT / sensitivity) * (1 + calibration.noiseFloor * 2);
+    const needLift = (MIN_LIFT / (sensitivity * context.assist)) * (1 + calibration.noiseFloor * 2);
     if (leg.peakHeight < needLift) {
       context.mistakes.note('kickTooLow', leg.side, leg.peakHeight / needLift, now);
       return null;

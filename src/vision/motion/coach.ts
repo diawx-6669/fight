@@ -208,6 +208,11 @@ export class MistakeLog {
     this.tally.set(code, (this.tally.get(code) ?? 0) + 1);
   }
 
+  /** Ошибки, накопленные в этом кадре и ещё не разобранные. */
+  recent(): readonly Mistake[] {
+    return this.items;
+  }
+
   /**
    * Разбирает накопленное за кадр и обновляет показываемую подсказку.
    *

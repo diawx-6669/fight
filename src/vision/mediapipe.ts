@@ -210,5 +210,20 @@ export async function createHandLandmarker(options: {
   }
 }
 
+/**
+ * Адреса, по которым лежат рантайм и модель, — для воркера.
+ *
+ * Резолвятся здесь, а не в воркере, по одной причине: путь считается от
+ * `document.baseURI`, а в воркере документа нет. Считать его там заново значило
+ * бы держать две разные версии одной логики, которые однажды разойдутся.
+ */
+export async function resolveWorkerAssets(model: ModelKey = 'poseLite'): Promise<{
+  wasmBase: string;
+  modelUrl: string;
+}> {
+  const [wasmBase, modelUrl] = await Promise.all([resolveWasmBase(), resolveModelUrl(model)]);
+  return { wasmBase, modelUrl };
+}
+
 export type PoseLandmarkerInstance = Awaited<ReturnType<typeof createPoseLandmarker>>;
 export type HandLandmarkerInstance = Awaited<ReturnType<typeof createHandLandmarker>>;

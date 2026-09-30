@@ -114,6 +114,14 @@ export interface MotionContext {
    * Multiplies every detector's threshold so one slider tunes the whole feel.
    */
   readonly sensitivity: number;
+  /**
+   * Автоподстройка: на это число делятся пороги.
+   *
+   * Отдельно от `sensitivity`, хотя множитель по сути тот же. Чувствительность
+   * выставил человек, и трогать её игра не вправе; помощь игра назначила себе
+   * сама, и смешивать их значило бы незаметно переписывать чужую настройку.
+   */
+  readonly assist: number;
 }
 
 /** A detector emits zero or one action per frame and may update shared state. */

@@ -169,7 +169,7 @@ export class PunchDetector implements MotionDetector {
     context: MotionContext,
     state: MotionState,
   ): ActionEvent | null {
-    const { skeleton, calibration, dt, sensitivity } = context;
+    const { skeleton, calibration, dt, sensitivity, assist } = context;
 
     const shoulderId = arm.side === 'left' ? Joint.LeftShoulder : Joint.RightShoulder;
     const wristId = arm.side === 'left' ? Joint.LeftWrist : Joint.RightWrist;
@@ -214,7 +214,8 @@ export class PunchDetector implements MotionDetector {
     // Thresholds scale with sensitivity and with how far the player is standing:
     // a distant player produces smaller body-space velocities.
     const launchThreshold =
-      (launchSpeedFor(calibration.reachForward) / sensitivity) * (1 + calibration.noiseFloor * 3);
+      (launchSpeedFor(calibration.reachForward) / (sensitivity * assist)) *
+      (1 + calibration.noiseFloor * 3);
 
     switch (arm.phase) {
       case 'idle': {
@@ -316,14 +317,14 @@ export class PunchDetector implements MotionDetector {
     extension: number,
     shoulderY: number,
   ): ActionEvent | null {
-    const { calibration, sensitivity, now } = context;
+    const { calibration, sensitivity, assist, now } = context;
 
     const travelX = wristX - arm.startX;
     const travelY = wristY - arm.startY;
     const travel = Math.hypot(travelX, travelY);
 
     // Reject twitches: the hand must actually have gone somewhere.
-    const minTravel = calibration.reachForward * MIN_TRAVEL_RATIO * (1 / sensitivity);
+    const minTravel = calibration.reachForward * MIN_TRAVEL_RATIO / (sensitivity * assist);
     if (travel < minTravel) {
       // Нижняя граница у самой жалобы. Возврат руки к лицу проходит через
       // точку, где расстояние до плеча снова растёт, и это иногда открывает

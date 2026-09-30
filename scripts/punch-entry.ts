@@ -21,6 +21,8 @@ export interface Landmark {
 }
 
 export interface PunchRunResult {
+  /** Насколько игра облегчила себе пороги, в процентах. */
+  assistPercent: number;
   actions: { kind: string; technique: string; side: string; power: number }[];
   mistakes: { code: MistakeCode; count: number }[];
   hint: { code: MistakeCode; title: string; fix: string; progress: number } | null;
@@ -38,12 +40,25 @@ export interface PunchRunResult {
  */
 export function runPunch(
   frames: Landmark[][],
-  options: { stepMs?: number; sensitivity?: number; calibration?: Partial<CalibrationProfile> } = {},
+  options: {
+    stepMs?: number;
+    sensitivity?: number;
+    calibration?: Partial<CalibrationProfile>;
+    /** Зафиксировать автоподстройку на этом уровне — для прямого сравнения. */
+    assist?: number;
+  } = {},
 ): PunchRunResult {
   const stepMs = options.stepMs ?? 33;
   const calibration: CalibrationProfile = { ...DEFAULT_CALIBRATION, ...options.calibration };
 
   const analyzer = new MotionAnalyzer({ sensitivity: options.sensitivity ?? 1, calibration });
+  if (options.assist !== undefined) {
+    analyzer.assist.level = options.assist;
+    // Пин: иначе собственная логика подстройки тут же сдвинет уровень, и
+    // сравнение перестанет быть сравнением.
+    analyzer.assist.noteMistake = () => {};
+    analyzer.assist.noteHit = () => {};
+  }
   const skeleton = new Skeleton();
   const actions: ActionEvent[] = [];
 
@@ -55,6 +70,7 @@ export function runPunch(
 
   const hint = analyzer.mistakes.hint;
   return {
+    assistPercent: analyzer.assist.percent,
     actions: actions.map((a) => ({
       kind: a.kind,
       technique: a.technique,
