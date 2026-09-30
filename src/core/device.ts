@@ -163,9 +163,25 @@ export const QUALITY_PRESETS: Record<QualityTier, QualitySettings> = {
  * keep up. Fighting games live or die on a stable frame rate, so we would
  * rather drop particles than drop inputs.
  */
+/** Сколько секунд усредняем частоту кадров перед решением. */
+const WINDOW_MS = 1500;
+
+/** Пауза между изменениями уровня, чтобы он не мигал у порога. */
+const SETTLE_MS = 3000;
+
+/** Ниже этого — понижаем уровень. */
+const DROP_FPS = 42;
+
+/** Ниже этого спорить не о чем: сразу на самый низкий уровень. */
+const COLLAPSE_FPS = 22;
+
+/** Выше этого — можно попробовать уровень повыше. */
+const RAISE_FPS = 58;
+
 export class AdaptiveQuality {
   private samples: number[] = [];
   private lastChange = 0;
+  private windowStart = 0;
   private readonly order: QualityTier[] = ['low', 'medium', 'high', 'ultra'];
 
   constructor(
@@ -185,23 +201,61 @@ export class AdaptiveQuality {
     this.onChange(tier);
   }
 
+  /**
+   * Принимает уровень, выставленный со стороны, не объявляя об этом.
+   *
+   * Нужно потому, что игрок может поменять качество руками в настройках, и без
+   * этого регулятор продолжал бы считать текущим тот уровень, который сам
+   * выставил в прошлый раз. Следующее его решение отсчитывалось бы от
+   * несуществующего состояния — например, «понизить на ступень» относительно
+   * уровня, который человек уже давно сменил.
+   */
+  syncTier(tier: QualityTier): void {
+    this.tier = tier;
+    this.samples.length = 0;
+    this.windowStart = 0;
+  }
+
   sample(fps: number, now: number): void {
     if (!this.enabled) return;
+
     this.samples.push(fps);
-    if (this.samples.length < 120) return;
+    if (this.windowStart === 0) this.windowStart = now;
+
+    // Окно измеряется секундами, а не кадрами.
+    //
+    // Раньше здесь ждали сто двадцать кадров — и это ровно та ошибка, из-за
+    // которой регулятор бесполезен именно там, где он нужен. На машине,
+    // выдающей восемь кадров в секунду, сто двадцать кадров — это пятнадцать
+    // секунд до первого понижения и полминуты до второго. Всё это время
+    // человек сидит в неиграбельном тормозе, ради спасения от которого
+    // регулятор и написан. Чем хуже машина, тем дольше он молчал.
+    if (now - this.windowStart < WINDOW_MS) return;
 
     const avg = this.samples.reduce((a, b) => a + b, 0) / this.samples.length;
     this.samples.length = 0;
+    this.windowStart = now;
 
-    // Leave at least four seconds between changes, otherwise the tier
-    // oscillates around the threshold and the look of the game flickers.
-    if (now - this.lastChange < 4000) return;
+    // Leave a few seconds between changes, otherwise the tier oscillates
+    // around the threshold and the look of the game flickers.
+    if (now - this.lastChange < SETTLE_MS) return;
 
     const index = this.order.indexOf(this.tier);
-    if (avg < 42 && index > 0) {
+
+    if (avg < DROP_FPS && index > 0) {
+      // Насколько плохо, настолько и падаем. Спускаться по одной ступени с
+      // паузой на каждой — значит провести ещё несколько секунд в тормозах
+      // на пути к уровню, который машина тянет. При десяти кадрах в секунду
+      // спорить не о чем: сразу на нижний.
+      const step = avg < COLLAPSE_FPS ? index : 1;
       this.lastChange = now;
-      this.setTier(this.order[index - 1]);
-    } else if (avg > 58 && index < this.order.length - 1) {
+      this.setTier(this.order[index - step]);
+      return;
+    }
+
+    // Наверх — только по одной ступени и только с хорошим запасом: ошибка
+    // вверх возвращает тормоза, ошибка вниз стоит немного блеска.
+    if (avg > RAISE_FPS && index < this.order.length - 1) {
       this.lastChange = now;
       this.setTier(this.order[index + 1]);
     }

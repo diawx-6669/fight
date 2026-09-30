@@ -521,7 +521,7 @@ export class FightScene {
 
     ctx.save();
     ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
+    ctx.imageSmoothingQuality = 'low';
     ctx.drawImage(this.backdropLayer, 0, 0, DESIGN_WIDTH, DESIGN_HEIGHT);
     ctx.restore();
   }

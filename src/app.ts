@@ -261,6 +261,7 @@ export class App {
 
     this.renderer.setRenderScale(QUALITY_PRESETS[next.quality].renderScale);
     this.adaptiveQuality.enabled = next.autoQuality;
+    this.adaptiveQuality.syncTier(next.quality);
 
     this.audio.setSettings({
       master: next.masterVolume,

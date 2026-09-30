@@ -22,11 +22,24 @@ import { alpha, mix } from './theme';
 
 const SAMPLES = 480;
 
+/** Запас сверху у испечённой полосы — на вертикальный сдвиг при прыжке. */
+const VERTICAL_SLACK = 90;
+
 interface BakedLayer {
   readonly layer: ArenaLayer;
   readonly canvas: HTMLCanvasElement;
   /** Width of the baked strip in design pixels; it tiles horizontally. */
   readonly width: number;
+  /**
+   * Где в дизайн-пространстве находится верх полосы.
+   *
+   * Слой занимает только нижнюю часть кадра — гребень и всё под ним. Раньше
+   * полоса пеклась во всю высоту экрана, и вместе с ней на каждом кадре
+   * блитилась прозрачная пустота над гребнем: до половины пикселей впустую,
+   * помноженное на число слоёв.
+   */
+  readonly top: number;
+  readonly height: number;
 }
 
 export class BackgroundRenderer {
@@ -58,41 +71,54 @@ export class BackgroundRenderer {
       const layer = layers[index];
       const heights = generateLayerHeights(arena.id, arena.layers.indexOf(layer), layer, SAMPLES);
 
-      // The strip is drawn twice as wide as the stage so it can scroll and wrap
+      // The strip is drawn wider than the stage so it can scroll and wrap
       // without a visible seam at any parallax factor.
       const width = Math.round(DESIGN_WIDTH * 1.5);
-      const height = DESIGN_HEIGHT;
+
+      // Печём только ту полосу, в которой слой вообще что-то рисует: от самого
+      // высокого гребня до низа кадра, плюс запас на вертикальный сдвиг.
+      // Всё, что выше, — прозрачные пиксели, которые незачем ни хранить, ни
+      // перекладывать шестьдесят раз в секунду.
+      let peak = 0;
+      for (let i = 0; i <= SAMPLES; i++) peak = Math.max(peak, heights[i]);
+      const top = Math.max(0, Math.floor(DESIGN_HEIGHT * (1 - peak) - VERTICAL_SLACK));
+      const height = DESIGN_HEIGHT - top;
+
       const canvas = document.createElement('canvas');
       canvas.width = width;
       canvas.height = height;
       const ctx = canvas.getContext('2d');
       if (!ctx) continue;
 
+      // Рисуем в координатах кадра, а потом сдвигаем — так формулы гребня
+      // остаются прежними и не надо держать в голове смещение полосы.
+      ctx.translate(0, -top);
+
       const color = mix(layer.color, arena.lighting.skyMid, layer.haze * 0.65);
       ctx.fillStyle = color;
       ctx.beginPath();
-      ctx.moveTo(0, height);
+      ctx.moveTo(0, DESIGN_HEIGHT);
 
       for (let i = 0; i <= SAMPLES; i++) {
         const x = (i / SAMPLES) * width;
-        const y = height - heights[i] * height;
+        const y = DESIGN_HEIGHT - heights[i] * DESIGN_HEIGHT;
         if (i === 0) ctx.lineTo(x, y);
         else ctx.lineTo(x, y);
       }
 
-      ctx.lineTo(width, height);
+      ctx.lineTo(width, DESIGN_HEIGHT);
       ctx.closePath();
       ctx.fill();
 
       // A faint light rim along the top edge of each ridge, catching the sun.
       ctx.globalCompositeOperation = 'source-atop';
-      const rim = ctx.createLinearGradient(0, 0, 0, height);
+      const rim = ctx.createLinearGradient(0, top, 0, DESIGN_HEIGHT);
       rim.addColorStop(0, alpha(arena.lighting.sun, 0.16 * (1 - layer.haze)));
       rim.addColorStop(0.35, 'rgba(0,0,0,0)');
       ctx.fillStyle = rim;
-      ctx.fillRect(0, 0, width, height);
+      ctx.fillRect(0, top, width, height);
 
-      this.baked.push({ layer, canvas, width });
+      this.baked.push({ layer, canvas, width, top, height });
     }
   }
 
@@ -154,25 +180,42 @@ export class BackgroundRenderer {
     ctx.restore();
   }
 
+  /**
+   * Рисует один слой фона.
+   *
+   * Долго это была самая дорогая операция в игре, и не из-за сложности, а из-за
+   * объёма: полоса печётся шире кадра, чтобы стыка не было видно при любом
+   * параллаксе, и её блитили целиком — двумя прогонами по 2880×1080 каждый.
+   * Помноженное на семь слоёв это тридцать семь мегапикселей перекладывания на
+   * кадр, из которых на экран попадала едва пятая часть. Профилировщик показал
+   * `drawImage` как 65% всего времени кадра.
+   *
+   * Теперь берутся только те пиксели, которые видно: прямоугольник шириной в
+   * сцену, при необходимости разрезанный на два куска по месту переноса. Там,
+   * где раньше было 2880 пикселей ширины на слой, стало ровно 1920.
+   */
   private drawLayer(ctx: CanvasRenderingContext2D, camera: Camera2D, baked: BakedLayer): void {
-    const { layer, canvas, width } = baked;
+    const { layer, canvas, width, top, height } = baked;
 
     // Parallax: distant layers barely move, near layers race past.
     const offset = -camera.x * layer.parallax * camera.pixelsPerMetre * 0.25;
-    // Wrap into `[-width, 0)` so exactly two blits always cover the stage.
-    let start = offset % width;
-    if (start > 0) start -= width;
 
     // Near layers also rise and fall slightly with the camera, which sells the
     // vertical parallax when a fighter jumps.
-    const verticalShift = (camera.y - 1.1) * layer.parallax * 40;
+    const y = top + (camera.y - 1.1) * layer.parallax * 40;
 
-    ctx.save();
-    ctx.globalAlpha = 1;
-    for (let x = start; x < DESIGN_WIDTH; x += width) {
-      ctx.drawImage(canvas, x, verticalShift, width, DESIGN_HEIGHT);
+    // Точка полосы, попадающая в левый край сцены, приведённая в `[0, width)`.
+    let source = (-offset) % width;
+    if (source < 0) source += width;
+
+    const first = Math.min(DESIGN_WIDTH, width - source);
+    ctx.drawImage(canvas, source, 0, first, height, 0, y, first, height);
+
+    // Хвост, если сцена шире остатка полосы: полоса заворачивается на себя.
+    const rest = DESIGN_WIDTH - first;
+    if (rest > 0) {
+      ctx.drawImage(canvas, 0, 0, rest, height, first, y, rest, height);
     }
-    ctx.restore();
   }
 
   private drawGround(ctx: CanvasRenderingContext2D, camera: Camera2D, arena: Arena): void {

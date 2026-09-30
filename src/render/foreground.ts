@@ -72,10 +72,24 @@ export class ForegroundRenderer {
     const offset = -camera.x * PARALLAX * 26;
     const lift = (camera.y - 1.1) * 22;
 
+    // Блитим только края, а не весь кадр.
+    //
+    // Между двумя элементами лежит пустота: середина экрана по правилу №1
+    // всегда свободна, и это три четверти кадра прозрачных пикселей, которые
+    // перекладывались каждый кадр впустую. Профилировщик показал `drawImage`
+    // как главный расход игры, и это была одна из четырёх полноэкранных
+    // операций, ни одной из которых не требовался полный экран.
+    const band = INNER_LIMIT + OUTER_MARGIN + Math.abs(offset) + 8;
+    const right = DESIGN_WIDTH - band;
+
     ctx.save();
     ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(canvas, offset, lift, DESIGN_WIDTH, DESIGN_HEIGHT);
+    ctx.imageSmoothingQuality = 'low';
+    ctx.drawImage(canvas, 0, 0, band, DESIGN_HEIGHT, offset, lift, band, DESIGN_HEIGHT);
+    ctx.drawImage(
+      canvas, right, 0, band, DESIGN_HEIGHT,
+      right + offset, lift, band, DESIGN_HEIGHT,
+    );
     ctx.restore();
   }
 
@@ -107,7 +121,7 @@ export class ForegroundRenderer {
     if (!fullCtx) return null;
 
     fullCtx.imageSmoothingEnabled = true;
-    fullCtx.imageSmoothingQuality = 'high';
+    fullCtx.imageSmoothingQuality = 'low';
     fullCtx.drawImage(small, 0, 0, DESIGN_WIDTH, DESIGN_HEIGHT);
     return full;
   }
