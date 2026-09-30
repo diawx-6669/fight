@@ -157,6 +157,30 @@ console.log('\nТот же удар, в кадре только верх тел�
   );
 }
 
+console.log('\nУдар проходит при любой калибровке:');
+{
+  // Самая дорогая ошибка этого проекта жила здесь. Порог был привязан к
+  // размаху из калибровки, а калибровка просит вытянуть руку *максимально* —
+  // в бою же человек бьёт нормально, то есть короче. Чем честнее он
+  // калибровался, тем выше игра поднимала ему планку, и тем меньше ударов
+  // засчитывала. Снаружи это выглядело как «сайт не видит моих ударов».
+  //
+  // Калибровка может записать почти что угодно, а удар обязан проходить.
+  for (const [label, opts] of [
+    ['полный рост', { scale: 1, fullBody: true }],
+    ['верх тела', { scale: 2.2, fullBody: false }],
+  ]) {
+    const frames = punchSequence(opts);
+    const failed = [];
+    for (const reachForward of [0.6, 0.9, 1.2, 1.55, 2.0, 2.5, 3.0]) {
+      const r = runPunch(frames, { calibration: { reachForward } });
+      if (r.actions.filter((a) => a.kind === 'punch').length === 0) failed.push(reachForward);
+    }
+    check(`${label}: удар засчитан при любом размахе из калибровки`, failed.length === 0,
+      failed.length ? `не прошло при ${failed.join(', ')}` : '');
+  }
+}
+
 console.log('\nРежим «ошибка» — слабый, недоведённый удар:');
 {
   // Кисть проходит четверть нужного пути: человек обозначил удар, а не ударил.
@@ -200,7 +224,7 @@ console.log('\nАвтоподстройка — игра, которая не в
 
   let frames = [];
   for (let i = 0; i < 12; i++) {
-    frames = frames.concat(punchSequence({ scale: 1, fullBody: true, travel: 0.5, punchFrames: 6, idleFrames: 8 }));
+    frames = frames.concat(punchSequence({ scale: 1, fullBody: true, travel: 0.45, punchFrames: 7, idleFrames: 8 }));
   }
   const r = runPunch(frames, { calibration });
 
@@ -217,16 +241,21 @@ console.log('\nПодстройка действительно опускает 
   const calibration = calibrationFor(reference);
   let frames = [];
   for (let i = 0; i < 10; i++) {
-    frames = frames.concat(punchSequence({ scale: 1, fullBody: true, travel: 0.55, punchFrames: 6, idleFrames: 8 }));
+    frames = frames.concat(punchSequence({ scale: 1, fullBody: true, travel: 0.45, punchFrames: 7, idleFrames: 8 }));
   }
 
+  // Меряем не число ударов, а насколько близко к порогу оказалось одно и то
+  // же движение. Так честнее: после починки порогов обычный удар проходит и
+  // без помощи, и сравнивать стало нечего — а вот движение, слишком слабое
+  // при любых настройках, показывает сдвиг планки прямо.
   const strict = runPunch(frames, { calibration, assist: 1 });
   const helped = runPunch(frames, { calibration, assist: 1.5 });
-  const a = strict.actions.filter((x) => x.kind === 'punch').length;
-  const b = helped.actions.filter((x) => x.kind === 'punch').length;
+  const a = strict.hint ? strict.hint.progress : 0;
+  const b = helped.hint ? helped.hint.progress : 0;
 
-  check('с подстройкой засчитывается больше ударов', b > a, `${a} → ${b}`);
-  console.log(`    → без помощи ${a}, с помощью ${b}`);
+  check('с подстройкой то же движение ближе к порогу', b > a + 0.05,
+    `${Math.round(a * 100)}% → ${Math.round(b * 100)}%`);
+  console.log(`    → одно и то же движение: ${Math.round(a * 100)}% порога без помощи, ${Math.round(b * 100)}% с помощью`);
 }
 
 console.log('\nАвтоподстройка не включается, когда всё и так работает:');

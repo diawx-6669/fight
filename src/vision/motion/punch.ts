@@ -110,7 +110,19 @@ function launchSpeedFor(reachForward: number): number {
   const ratio = Number.isFinite(reachForward) && reachForward > 0
     ? reachForward / REFERENCE_REACH
     : 1;
-  return LAUNCH_SPEED * clamp(ratio, 0.45, 1.35);
+
+  // Вниз — да, вверх — никогда, и это не осторожность, а исправление ошибки.
+  //
+  // Калибровка просит вытянуть руку *максимально далеко*. В бою человек бьёт
+  // нормально, а нормальный удар короче предельного вытягивания. То есть
+  // `reachForward` систематически больше того размаха, которым человек
+  // действительно бьёт, — и порог, растущий вместе с ним, наказывал именно за
+  // честную калибровку: чем добросовестнее человек тянулся на разминке, тем
+  // выше игра поднимала ему планку и тем меньше ударов засчитывала.
+  //
+  // Измерено: один и тот же удар при размахе 1.0 проходит, при 1.55 и выше —
+  // ни разу. Поэтому вверх множитель не идёт.
+  return LAUNCH_SPEED * clamp(ratio, 0.45, 1);
 }
 
 /** Below this the extension is treated as finished. */
@@ -122,8 +134,21 @@ const MAX_EXTENSION_TIME = 0.42;
 /** Minimum gap between punches from the same arm, seconds. */
 const ARM_COOLDOWN = 0.22;
 
-/** How far the wrist must actually travel, as a fraction of calibrated reach. */
-const MIN_TRAVEL_RATIO = 0.3;
+/**
+ * Сколько кисть обязана пройти, долей от калиброванного размаха.
+ *
+ * Было 0.3 — и это никогда не могло работать. Удар засчитывается на *пике
+ * скорости*, а не на полном выпрямлении: так он приходится на момент, когда
+ * человек чувствует удар, а не на шестьдесят миллисекунд позже. К пику кисть
+ * проходит чуть больше половины пути. Требовать от неё треть предельного
+ * размаха — при том что сам предельный размах больше боевого — значит
+ * требовать больше, чем удар даёт физически.
+ */
+const MIN_TRAVEL_RATIO = 0.18;
+
+/** Границы требования к пути, в телесных единицах. */
+const MIN_TRAVEL_FLOOR = 0.12;
+const MIN_TRAVEL_CEILING = 0.34;
 
 /**
  * How far from the centre line a wrist is "tucked into a guard" and how far it
@@ -324,7 +349,19 @@ export class PunchDetector implements MotionDetector {
     const travel = Math.hypot(travelX, travelY);
 
     // Reject twitches: the hand must actually have gone somewhere.
-    const minTravel = calibration.reachForward * MIN_TRAVEL_RATIO / (sensitivity * assist);
+    // Требование к пути ограничено и сверху, и снизу.
+    //
+    // Калибровка может записать что угодно — человек мог махать рукой вместо
+    // того, чтобы тянуться, мог не дотянуться вовсе. Но путь, который кисть
+    // успевает пройти до пика скорости, задаётся не калибровкой, а тем, как
+    // устроен сам удар: у всех он выходит в пределах трети телесной единицы.
+    // Потолок здесь — защита от калибровки, после которой не проходит ни один
+    // удар; пол — от калибровки, после которой проходит любое шевеление.
+    const minTravel = clamp(
+      calibration.reachForward * MIN_TRAVEL_RATIO,
+      MIN_TRAVEL_FLOOR,
+      MIN_TRAVEL_CEILING,
+    ) / (sensitivity * assist);
     if (travel < minTravel) {
       // Нижняя граница у самой жалобы. Возврат руки к лицу проходит через
       // точку, где расстояние до плеча снова растёт, и это иногда открывает
