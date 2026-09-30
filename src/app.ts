@@ -22,6 +22,8 @@ import { MenuScreen } from '@/ui/screens/menu';
 import { ModeScreen } from '@/ui/screens/mode';
 import { PauseScreen } from '@/ui/screens/pause';
 import { ResultsScreen } from '@/ui/screens/results';
+import { CasesScreen } from '@/ui/screens/cases';
+import { RecordsScreen } from '@/ui/screens/records';
 import { SettingsScreen } from '@/ui/screens/settings';
 import { BlankFrameWatch } from '@/core/blankwatch';
 
@@ -164,6 +166,8 @@ export class App {
     this.router.register('fight', (context) => new FightScreen(context));
     this.router.register('pause', (context) => new PauseScreen(context));
     this.router.register('results', (context) => new ResultsScreen(context));
+    this.router.register('cases', (context) => new CasesScreen(context));
+    this.router.register('records', (context) => new RecordsScreen(context));
     this.router.register('error', (context) => new ErrorScreen(context));
   }
 

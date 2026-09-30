@@ -236,8 +236,15 @@ export function unlockedCharacters(wins: number): readonly Character[] {
   );
 }
 
-export function isUnlocked(character: Character, wins: number): boolean {
-  return character.unlockedByDefault || wins >= character.unlockWins;
+/**
+ * Есть ли у игрока этот боец.
+ *
+ * Раньше это решало число побед. Теперь решает владение: бойцы выпадают из
+ * кейсов, и победы к ним отношения не имеют — они приносят монеты, а кейс
+ * приносит бойца. `unlockedByDefault` остаётся как стартовый набор.
+ */
+export function isUnlocked(character: Character, owned: readonly string[]): boolean {
+  return character.unlockedByDefault || owned.includes(character.id);
 }
 
 /** Stat bars for the select screen, each normalised to `[0, 1]`. */

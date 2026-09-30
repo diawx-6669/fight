@@ -232,7 +232,7 @@ export class CharacterScreen extends Screen {
 
     for (let i = 0; i < roster.length; i++) {
       const character = roster[i];
-      const unlocked = isUnlocked(character, this.context.progress.wins);
+      const unlocked = isUnlocked(character, this.context.progress.owned);
       const rect: Rect = { x: startX + i * (size + gap), y, w: size, h: size };
       const selected = i === this.index;
 
@@ -314,7 +314,8 @@ export class CharacterScreen extends Screen {
         font(ctx, TypeScale.micro, 'ui', 700);
         ctx.textAlign = 'center';
         ctx.fillStyle = Palette.ash500;
-        ctx.fillText(`${character.unlockWins} ПОБЕД`, cx, rect.y + rect.h - 12);
+        // Не «столько-то побед», а «из кейса»: побед больше недостаточно.
+        ctx.fillText('ИЗ КЕЙСА', cx, rect.y + rect.h - 12);
       }
 
       ctx.restore();
@@ -374,7 +375,7 @@ export class CharacterScreen extends Screen {
   private drawControls(ctx: CanvasRenderingContext2D): void {
     void ctx;
     const y = DESIGN_HEIGHT - 116;
-    const unlocked = isUnlocked(this.current, this.context.progress.wins);
+    const unlocked = isUnlocked(this.current, this.context.progress.owned);
 
     if (
       button(this.context.widgets, {
@@ -393,7 +394,7 @@ export class CharacterScreen extends Screen {
       button(this.context.widgets, {
         id: 'char:start',
         rect: { x: DESIGN_WIDTH - 128 - 360, y, w: 360, h: 74 },
-        label: unlocked ? 'В БОЙ' : 'ЗАБЛОКИРОВАН',
+        label: unlocked ? 'В БОЙ' : 'НЕТ В КОЛЛЕКЦИИ',
         glyph: 'play',
         primary: true,
         disabled: !unlocked,

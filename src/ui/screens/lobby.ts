@@ -151,7 +151,7 @@ export class LobbyScreen extends Screen {
   }
 
   private get currentCharacter() {
-    const unlocked = CHARACTERS.filter((c) => isUnlocked(c, this.context.progress.wins));
+    const unlocked = CHARACTERS.filter((c) => isUnlocked(c, this.context.progress.owned));
     return unlocked[clamp(this.characterIndex, 0, unlocked.length - 1)] ?? getCharacter('kai');
   }
 
@@ -256,7 +256,7 @@ export class LobbyScreen extends Screen {
         accent: Palette.ash300,
       })
     ) {
-      const unlocked = CHARACTERS.filter((c) => isUnlocked(c, this.context.progress.wins));
+      const unlocked = CHARACTERS.filter((c) => isUnlocked(c, this.context.progress.owned));
       this.characterIndex = (this.characterIndex + 1) % unlocked.length;
       this.context.audio.play('hover');
     }

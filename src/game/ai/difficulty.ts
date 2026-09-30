@@ -51,11 +51,21 @@ export interface DifficultySettings {
 
   /** Chance per second of a deliberate mistake: a wasted move, a dropped guard. */
   readonly mistakeRate: number;
+
+  /**
+   * Множитель награды за бой на этой сложности.
+   *
+   * Живёт здесь, а не в экономике, потому что это свойство соперника, а не
+   * кошелька: если однажды появится новая сложность, забыть про её цену будет
+   * невозможно — поле обязательное.
+   */
+  readonly rewardScale: number;
 }
 
 export const DIFFICULTIES: Record<DifficultyId, DifficultySettings> = {
   rookie: {
     id: 'rookie',
+    rewardScale: 0.7,
     label: 'НОВИЧОК',
     description: 'Учится вместе с тобой. Бьёт редко, блокирует ещё реже.',
     reactionFrames: 26,
@@ -74,6 +84,7 @@ export const DIFFICULTIES: Record<DifficultyId, DifficultySettings> = {
 
   fighter: {
     id: 'fighter',
+    rewardScale: 1.0,
     label: 'БОЕЦ',
     description: 'Держит стойку, наказывает за откровенные ошибки.',
     reactionFrames: 19,
@@ -92,6 +103,7 @@ export const DIFFICULTIES: Record<DifficultyId, DifficultySettings> = {
 
   veteran: {
     id: 'veteran',
+    rewardScale: 1.2,
     label: 'ВЕТЕРАН',
     description: 'Читает дистанцию, ловит на промахах, меняет уровень блока.',
     reactionFrames: 14,
@@ -110,6 +122,7 @@ export const DIFFICULTIES: Record<DifficultyId, DifficultySettings> = {
 
   master: {
     id: 'master',
+    rewardScale: 1.4,
     label: 'МАСТЕР',
     description: 'Играет в твою игру лучше тебя. Терпеливый и безжалостный.',
     reactionFrames: 11,
@@ -128,6 +141,7 @@ export const DIFFICULTIES: Record<DifficultyId, DifficultySettings> = {
 
   nightmare: {
     id: 'nightmare',
+    rewardScale: 1.6,
     label: 'КОШМАР',
     description: 'Твоя тень, которая тренировалась дольше тебя.',
     // Still 8 frames — about 130ms. Faster than this stops being a fight.

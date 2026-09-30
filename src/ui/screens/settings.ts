@@ -3,7 +3,8 @@ import { clearAll } from '@/core/storage';
 import type { CameraInfo } from '@/vision';
 import { DESIGN_HEIGHT, DESIGN_WIDTH } from '@/render/renderer';
 import { font, Palette, TypeScale } from '@/render/theme';
-import { DEFAULT_SETTINGS, SENSITIVITY_PRESETS, sensitivityLabel } from '@/settings';
+import { DEFAULT_PROGRESS, DEFAULT_SETTINGS, SENSITIVITY_PRESETS, sensitivityLabel } from '@/settings';
+import { startingRoster } from '@/game/cases';
 import { MenuBackdrop } from '../backdrop';
 import { Screen, type ScreenContext } from '../screen';
 import { button, panel, sectionTitle, segmented, slider, toggle, type Rect } from '../widgets';
@@ -546,17 +547,10 @@ export class SettingsScreen extends Screen {
     ) {
       clearAll();
       this.context.applySettings({ ...DEFAULT_SETTINGS });
-      this.context.saveProgress({
-        wins: 0,
-        losses: 0,
-        arcadeStage: 0,
-        survivalBest: 0,
-        played: [],
-        totalHits: 0,
-        totalDamage: 0,
-        bestCombo: 0,
-        perfects: 0,
-      });
+      // Сброс берёт значения по умолчанию, а не перечисляет поля руками:
+      // перечисление ломается каждый раз, когда в прогрессе появляется новое
+      // поле, и ломается молча — сброшенный игрок просто оставался без него.
+      this.context.saveProgress({ ...DEFAULT_PROGRESS, owned: startingRoster() });
       this.confirmingReset = false;
       this.context.audio.play('error');
       this.context.reset('menu');

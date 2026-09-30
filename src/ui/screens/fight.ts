@@ -4,6 +4,9 @@ import type { Settings } from '@/settings';
 import { ARENAS } from '@/game/arenas';
 import { CHARACTERS } from '@/game/characters';
 import { MOVES } from '@/game/moves';
+import { DIFFICULTIES } from '@/game/ai/difficulty';
+import { levelFromXp, levelUpBonus, rewardFor, type Reward } from '@/game/economy';
+import { withRecord } from '@/game/records';
 import { World, type GameMode } from '@/game/world';
 import type { NetClient } from '@/net/client';
 import { buildSnapshot, RemoteFighterSync } from '@/net/sync';
@@ -69,6 +72,13 @@ export class FightScreen extends Screen {
   private mode: GameMode = 'versus';
   private stage = 0;
   private finished = false;
+
+  /** Урон и лучшее комбо за этот бой — из них считается награда. */
+  private damageDealt = 0;
+  private bestCombo = 0;
+  /** Сколько уровней взято этим боем и сколько монет это принесло. */
+  private levelsGained = 0;
+  private levelBonus = 0;
 
   /** Survival only: how many opponents have already been beaten. */
   private streak = 0;
@@ -186,6 +196,12 @@ export class FightScreen extends Screen {
         // Progression is recorded as it happens, so a player who closes the
         // tab mid-match still keeps what they earned.
         if (event.attacker.controller === 'local') {
+          // Счётчики этого боя — из них считается награда в конце. Держим
+          // отдельно от общей статистики: та копится за всё время, эта
+          // обнуляется каждым боем.
+          this.damageDealt += event.damage;
+          this.bestCombo = Math.max(this.bestCombo, event.comboHits);
+
           const progress = context.progress;
           context.saveProgress({
             ...progress,
@@ -474,6 +490,7 @@ export class FightScreen extends Screen {
 
     const playerWon = winner === (this.localSlot === 0 ? 'p1' : 'p2');
     this.context.audio.play(playerWon ? 'victory' : 'defeat');
+    let reward: Reward | null = null;
 
     const progress = this.context.progress;
     const next = { ...progress };
@@ -489,6 +506,40 @@ export class FightScreen extends Screen {
       }
       const perfectRounds = this.world?.match.results.filter((r) => r.perfect).length ?? 0;
       next.perfects = progress.perfects + perfectRounds;
+
+      // Деньги и опыт считаются здесь, а не на экране итогов: выживание до
+      // него не доходит вовсе, а платить за пройденный бой надо всё равно.
+      reward = rewardFor({
+        won: playerWon,
+        rounds: this.world?.match.results ?? [],
+        damageDealt: this.damageDealt,
+        bestCombo: this.bestCombo,
+        perfects: perfectRounds,
+        difficulty: DIFFICULTIES[this.context.settings.difficulty]?.rewardScale ?? 1,
+        mode: this.mode,
+        stage: this.mode === 'survival' ? this.streak : this.stage,
+      });
+
+      const before = levelFromXp(progress.xp);
+      next.xp = progress.xp + reward.xp;
+      const after = levelFromXp(next.xp);
+
+      // Бонус за уровень начисляется за каждый пройденный, а не за последний:
+      // один бой может закрыть сразу два, и пропустить один из них было бы
+      // тихой потерей.
+      let bonus = 0;
+      for (let level = before.level; level < after.level; level++) bonus += levelUpBonus(level);
+
+      next.coins = progress.coins + reward.coins + bonus;
+      next.records = withRecord(progress.records, {
+        mode: this.mode,
+        score: this.recordScore(playerWon),
+        character: this.world?.fighters[this.localSlot].character.id ?? 'kai',
+        at: Date.now(),
+      });
+
+      this.levelsGained = after.level - before.level;
+      this.levelBonus = bonus;
       this.context.saveProgress(next);
     }
 
@@ -524,8 +575,25 @@ export class FightScreen extends Screen {
         playerCharacter: this.world?.fighters[this.localSlot].character.id,
         opponentCharacter: this.world?.fighters[this.remoteSlot].character.id,
         rounds: this.world?.match.results ?? [],
+        reward,
+        levelsGained: this.levelsGained,
+        levelBonus: this.levelBonus,
       });
     }, 2400);
+  }
+
+  /**
+   * Чем меряется рекорд в этом режиме.
+   *
+   * У режимов нет общей единицы: в аркаде важна ступень, в выживании — длина
+   * серии, в бою против человека — комбо. Складывать их в одну колонку было
+   * бы враньём, поэтому таблица хранит число вместе с режимом и показывает их
+   * раздельно.
+   */
+  private recordScore(won: boolean): number {
+    if (this.mode === 'arcade') return won ? this.stage + 1 : this.stage;
+    if (this.mode === 'survival') return this.streak + (won ? 1 : 0);
+    return this.bestCombo;
   }
 
   override onSettingsChanged(settings: Settings): void {

@@ -65,6 +65,22 @@ export class MenuScreen extends Screen {
         action: () => context.push('lobby'),
       },
       {
+        id: 'cases',
+        label: 'КЕЙСЫ',
+        hint: `Бойцы за монеты · у тебя ${context.progress.coins}`,
+        glyph: 'trophy',
+        accent: Palette.gold,
+        action: () => context.push('cases'),
+      },
+      {
+        id: 'records',
+        label: 'РЕКОРДЫ',
+        hint: 'Профиль, уровень, лучшие бои',
+        glyph: 'target',
+        accent: Palette.frost,
+        action: () => context.push('records'),
+      },
+      {
         id: 'calibrate',
         label: 'КАЛИБРОВКА',
         hint: 'Настроить распознавание под себя',

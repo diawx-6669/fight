@@ -3,6 +3,7 @@ import type { QualityTier } from '@/core/device';
 import { getDeviceProfile } from '@/core/device';
 import { loadMerged, save, StorageKeys } from '@/core/storage';
 import type { DifficultyId } from '@/game/ai/difficulty';
+import { CHARACTERS } from '@/game/characters';
 
 /**
  * Player settings.
@@ -157,6 +158,34 @@ export interface Progress {
   bestCombo: number;
   /** Perfect rounds. */
   perfects: number;
+
+  /** Монеты — тратятся на кейсы. */
+  coins: number;
+  /** Суммарный опыт за всё время; уровень выводится из него. */
+  xp: number;
+  /** Бойцы, которые у игрока есть. Пополняется из кейсов. */
+  owned: string[];
+  /** Сколько кейсов открыто — для таблицы рекордов. */
+  casesOpened: number;
+  /** Лучшие результаты по режимам. */
+  records: RecordEntry[];
+}
+
+/**
+ * Строка таблицы рекордов.
+ *
+ * Хранится списком, а не полем на каждый режим, потому что режимов станет
+ * больше, а таблица должна пережить это без миграции.
+ */
+export interface RecordEntry {
+  /** Режим: `arcade`, `survival`, `versus`, `online`. */
+  mode: string;
+  /** Что именно измеряется: ступень, серия, комбо. */
+  score: number;
+  /** Боец, которым это сделано. */
+  character: string;
+  /** Когда, миллисекунды эпохи. */
+  at: number;
 }
 
 export const DEFAULT_PROGRESS: Progress = {
@@ -169,10 +198,39 @@ export const DEFAULT_PROGRESS: Progress = {
   totalDamage: 0,
   bestCombo: 0,
   perfects: 0,
+  coins: 0,
+  xp: 0,
+  owned: [],
+  casesOpened: 0,
+  records: [],
 };
 
 export function loadProgress(): Progress {
-  return loadMerged(StorageKeys.progress, DEFAULT_PROGRESS);
+  const progress = loadMerged(StorageKeys.progress, DEFAULT_PROGRESS);
+
+  // Сохранение, сделанное до появления кейсов, не знает ни про монеты, ни про
+  // владение бойцами. Пустой список владения означал бы, что у человека
+  // отобрали всех, включая стартовых, — поэтому пустой список читается как
+  // «ещё не размечено» и заполняется стартовым набором плюс тем, что он уже
+  // заслужил победами по старым правилам.
+  if (!Array.isArray(progress.owned) || progress.owned.length === 0) {
+    progress.owned = earnedByWins(progress.wins);
+  }
+  if (!Array.isArray(progress.records)) progress.records = [];
+
+  return progress;
+}
+
+/**
+ * Кого игрок открыл бы по старым правилам — по числу побед.
+ *
+ * Нужно ровно один раз, при переходе на кейсы: отбирать уже заработанное
+ * было бы худшим способом познакомить человека с новой механикой.
+ */
+function earnedByWins(wins: number): string[] {
+  return CHARACTERS
+    .filter((c) => c.unlockedByDefault || wins >= c.unlockWins)
+    .map((c) => c.id);
 }
 
 export function saveProgress(progress: Progress): void {

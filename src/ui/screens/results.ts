@@ -7,6 +7,7 @@ import { alpha, Ease, font, Palette, TypeScale } from '@/render/theme';
 import { MenuBackdrop } from '../backdrop';
 import { Screen, type ScreenContext, type ScreenParams } from '../screen';
 import { button, chamferedRect, panel, type Rect } from '../widgets';
+import { levelFromXp, type Reward } from '@/game/economy';
 
 /**
  * Results.
@@ -27,7 +28,14 @@ interface ResultParams extends ScreenParams {
   playerCharacter: string;
   opponentCharacter: string;
   rounds: RoundResult[];
+  /** Что бой принёс. `null` в тренировке — там не платят. */
+  reward: Reward | null;
+  levelsGained: number;
+  levelBonus: number;
 }
+
+/** Ширина правой колонки с наградой, включая поля. */
+const REWARD_COLUMN = 640;
 
 export class ResultsScreen extends Screen {
   readonly id = 'results' as const;
@@ -66,6 +74,7 @@ export class ResultsScreen extends Screen {
     this.drawMatchup(ctx);
     this.drawRounds(ctx);
     this.drawStats(ctx);
+    this.drawReward(ctx);
     this.drawControls(ctx);
   }
 
@@ -77,7 +86,7 @@ export class ResultsScreen extends Screen {
     ctx.save();
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.translate(DESIGN_WIDTH / 2, 178);
+    ctx.translate(this.contentWidth() / 2, 178);
     // A slight horizontal squeeze on arrival, released as it settles.
     ctx.scale(1 + (1 - t) * 0.18, 1 - (1 - t) * 0.1);
     ctx.globalAlpha = t;
@@ -100,7 +109,7 @@ export class ResultsScreen extends Screen {
       ctx.strokeStyle = color;
       ctx.lineWidth = 4 * (1 - ringT) + 1;
       ctx.beginPath();
-      ctx.ellipse(DESIGN_WIDTH / 2, 178, 260 + ringT * 520, 90 + ringT * 180, 0, 0, TAU);
+      ctx.ellipse(this.contentWidth() / 2, 178, 260 + ringT * 520, 90 + ringT * 180, 0, 0, TAU);
       ctx.stroke();
       ctx.restore();
     }
@@ -120,11 +129,11 @@ export class ResultsScreen extends Screen {
     ctx.textAlign = 'right';
     font(ctx, 54, 'display');
     ctx.fillStyle = this.playerWon ? Palette.white : Palette.ash400;
-    ctx.fillText(player.name, DESIGN_WIDTH / 2 - 90, y);
+    ctx.fillText(player.name, this.contentWidth() / 2 - 90, y);
 
     ctx.textAlign = 'left';
     ctx.fillStyle = this.playerWon ? Palette.ash400 : Palette.white;
-    ctx.fillText(opponent.name, DESIGN_WIDTH / 2 + 90, y);
+    ctx.fillText(opponent.name, this.contentWidth() / 2 + 90, y);
 
     // Score in the middle.
     const p1Wins = params.rounds.filter(
@@ -137,7 +146,7 @@ export class ResultsScreen extends Screen {
     ctx.textAlign = 'center';
     font(ctx, 62, 'display');
     ctx.fillStyle = Palette.gold;
-    ctx.fillText(`${p1Wins} : ${p2Wins}`, DESIGN_WIDTH / 2, y);
+    ctx.fillText(`${p1Wins} : ${p2Wins}`, this.contentWidth() / 2, y);
     ctx.restore();
   }
 
@@ -149,7 +158,7 @@ export class ResultsScreen extends Screen {
     const cardWidth = 250;
     const gap = 20;
     const totalWidth = rounds.length * cardWidth + (rounds.length - 1) * gap;
-    const startX = (DESIGN_WIDTH - totalWidth) / 2;
+    const startX = (this.contentWidth() - totalWidth) / 2;
     const y = 372;
     const height = 200;
 
@@ -221,7 +230,8 @@ export class ResultsScreen extends Screen {
 
   private drawStats(ctx: CanvasRenderingContext2D): void {
     const progress = this.context.progress;
-    const rect: Rect = { x: (DESIGN_WIDTH - 900) / 2, y: 610, w: 900, h: 130 };
+    const width = Math.min(900, this.contentWidth() - 120);
+    const rect: Rect = { x: (this.contentWidth() - width) / 2, y: 610, w: width, h: 130 };
     panel(ctx, rect, 'всего', this.playerWon ? Palette.gold : Palette.rose);
 
     const entries: [string, number][] = [
@@ -250,6 +260,97 @@ export class ResultsScreen extends Screen {
       ctx.fillStyle = Palette.ash500;
       ctx.fillText(label, x, rect.y + 100);
       ctx.letterSpacing = '0px';
+    }
+    ctx.restore();
+  }
+
+  /**
+   * Что бой принёс.
+   *
+   * Построчно, а не одним числом. «+180 монет» не объясняет, почему именно
+   * сто восемьдесят, и человек не понимает, что ему делать иначе в следующий
+   * раз. Разложенная награда — «за урон», «за комбо ×5», «за чистый раунд» —
+   * это то же число и одновременно подсказка, чем заниматься в бою.
+   *
+   * Числа набегают вместе с остальной статистикой: цифра, которая растёт,
+   * читается, а готовая — проглатывается.
+   */
+  /**
+   * Ширина, отданная под сводку боя.
+   *
+   * Когда бой что-то принёс, справа встаёт колонка награды, и всё остальное
+   * ужимается — иначе карточки раундов лезут под неё. Без награды экран
+   * остаётся прежним: в тренировке отдавать треть ширины под пустоту незачем.
+   */
+  private contentWidth(): number {
+    const reward = this.params?.reward;
+    const paid = !!reward && (reward.coins > 0 || reward.xp > 0);
+    return paid ? DESIGN_WIDTH - REWARD_COLUMN : DESIGN_WIDTH;
+  }
+
+  private drawReward(ctx: CanvasRenderingContext2D): void {
+    const reward = this.params?.reward;
+    if (!reward || (reward.coins === 0 && reward.xp === 0)) return;
+
+    const t = Ease.out(this.countUp);
+    const rect = { x: DESIGN_WIDTH - REWARD_COLUMN + 30, y: 300, w: REWARD_COLUMN - 150, h: 440 };
+    panel(ctx, rect, 'ЗА ЭТОТ БОЙ', Palette.gold);
+
+    ctx.save();
+    let y = rect.y + 84;
+
+    for (const line of reward.lines) {
+      ctx.textAlign = 'left';
+      ctx.fillStyle = Palette.ash300;
+      font(ctx, TypeScale.body, 'ui', 500);
+      ctx.fillText(line.label, rect.x + 34, y);
+
+      ctx.textAlign = 'right';
+      ctx.fillStyle = Palette.gold;
+      font(ctx, TypeScale.body, 'ui', 700);
+      ctx.fillText(`+${Math.round(line.coins * t)}`, rect.x + rect.w - 130, y);
+
+      ctx.fillStyle = Palette.frost;
+      ctx.fillText(`+${Math.round(line.xp * t)}`, rect.x + rect.w - 34, y);
+      y += 32;
+    }
+
+    y += 10;
+    ctx.fillStyle = alpha(Palette.gold, 0.3);
+    ctx.fillRect(rect.x + 34, y, rect.w - 68, 2);
+    y += 40;
+
+    ctx.textAlign = 'left';
+    ctx.fillStyle = Palette.paper;
+    font(ctx, 30, 'display', 700);
+    ctx.fillText('ИТОГО', rect.x + 34, y);
+
+    ctx.textAlign = 'right';
+    ctx.fillStyle = Palette.gold;
+    ctx.fillText(`${Math.round(reward.coins * t)}`, rect.x + rect.w - 130, y);
+    ctx.fillStyle = Palette.frost;
+    ctx.fillText(`${Math.round(reward.xp * t)}`, rect.x + rect.w - 34, y);
+
+    ctx.textAlign = 'right';
+    ctx.fillStyle = Palette.ash500;
+    font(ctx, TypeScale.micro, 'ui', 500);
+    ctx.fillText('монеты', rect.x + rect.w - 130, y + 24);
+    ctx.fillText('опыт', rect.x + rect.w - 34, y + 24);
+
+    const gained = this.params?.levelsGained ?? 0;
+    if (gained > 0) {
+      const level = levelFromXp(this.context.progress.xp).level;
+      ctx.textAlign = 'center';
+      ctx.fillStyle = Palette.venom;
+      font(ctx, 34, 'display', 700);
+      ctx.fillText(
+        gained > 1 ? `+${gained} УРОВНЯ · ТЕПЕРЬ ${level}` : `НОВЫЙ УРОВЕНЬ · ${level}`,
+        rect.x + rect.w / 2,
+        rect.y + rect.h - 42,
+      );
+      ctx.fillStyle = Palette.gold;
+      font(ctx, TypeScale.micro, 'ui', 600);
+      ctx.fillText(`+${this.params?.levelBonus ?? 0} монет за уровень`, rect.x + rect.w / 2, rect.y + rect.h - 18);
     }
     ctx.restore();
   }

@@ -31,6 +31,8 @@ export type ScreenId =
   | 'fight'
   | 'pause'
   | 'results'
+  | 'cases'
+  | 'records'
   | 'error';
 
 /** Everything a screen is allowed to touch. */
